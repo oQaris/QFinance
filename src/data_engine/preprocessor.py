@@ -1,5 +1,7 @@
 import pandas as pd
 
+from src.data_engine.utils import check_file_path
+
 
 def fill_missing_dates_simple(group, dates):
     return group.set_index('date') \
@@ -36,6 +38,9 @@ def fill_missing_dates_expert(group, dates):
 if __name__ == '__main__':
     name = '2024-01-01_2024-09-28_DAY'
     df = pd.read_csv(f'../../data/raw/{name}.csv')
+
+    out_path = f'../../data/pre/{name}_preprocess.csv'
+    check_file_path(out_path)
 
     # Удаление тикеров с недостатком данных
 
@@ -93,6 +98,4 @@ if __name__ == '__main__':
     print(df.head())
 
     # Сохранение датасета
-
-    path = f'../../data/pre/{name}_preprocess.csv'
-    df.to_csv(path, index=False, sep=',', encoding='utf-8')
+    df.to_csv(out_path, index=False, encoding='utf-8')
