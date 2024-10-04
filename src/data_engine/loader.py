@@ -92,7 +92,7 @@ if __name__ == '__main__':
 
     file_name = '{}_{}_{}'.format(start_date.split(' ')[0], end_date.split(' ')[0], str(time_interval)[31:])
     print(file_name)
-    out_path = '../../data/' + file_name + '.csv'
+    out_path = '../../data/raw' + file_name + '.csv'
     check_file_path(out_path)
 
     result_df = asyncio.run(load_moex_data(token_str, start_date, end_date, time_interval))
