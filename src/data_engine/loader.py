@@ -50,25 +50,25 @@ async def load_candles_instr(client: AsyncServices, instr: Instrument, start: st
     ):
         lot = 1 if isinstance(instr, InstrumentShort) or instr.lot is None else instr.lot
         next_line = {
-            "tic": instr.ticker,
-            "date": datetime_to_utc_string(candle.time),
-            "open": convert_to_double(candle.open),
-            "close": convert_to_double(candle.close),
-            "high": convert_to_double(candle.high),
-            "low": convert_to_double(candle.low),
-            "volume": candle.volume,
-            "lot": lot
+            'tic': instr.ticker,
+            'date': datetime_to_utc_string(candle.time),
+            'open': convert_to_double(candle.open),
+            'close': convert_to_double(candle.close),
+            'high': convert_to_double(candle.high),
+            'low': convert_to_double(candle.low),
+            'volume': candle.volume,
+            'lot': lot
         }
         candles = pd.concat([candles, pd.DataFrame.from_records([next_line])])
     return candles
 
 
 async def get_vix(client: AsyncServices):
-    all_vix = await client.instruments.find_instrument(query="VIX")
+    all_vix = await client.instruments.find_instrument(query='VIX')
     all_vix = all_vix.instruments
     vix = [i for i in all_vix if i.instrument_type == 'index']
     if len(vix) > 1:
-        raise Exception("VIX mast be unique")
+        raise Exception('VIX mast be unique')
     return vix[0]
 
 
@@ -82,22 +82,31 @@ async def load_moex_data(token, start: str, end: str, interval: CandleInterval):
         vix = await get_vix(client)
         need_shares = [vix] + moex_shares
 
-        print("total instruments:", len(need_shares))
+        print('total instruments:', len(need_shares))
         for instr in (pbar := tqdm(need_shares)):
-            pbar.set_description(f"Processing {instr.ticker}")
+            pbar.set_description(f'Processing {instr.ticker}')
             acc = pd.concat([acc, await load_candles_instr(client, instr, start, end, interval)])
 
     return acc
 
 
 if __name__ == '__main__':
+    # токен для Invest API должен быть в этой переменной окружения
+    # https://www.tbank.ru/invest/settings/api/
+    token_str = os.environ['TOKEN']
     # должно быть в формате DATE_FORMAT
     start_date = '2024-01-01 00:00:00'
     end_date = '2024-09-28 19:00:00'
     time_interval = CandleInterval.CANDLE_INTERVAL_DAY
-    # токен для Invest API должен быть в этой переменной окружения
-    # https://www.tbank.ru/invest/settings/api/
-    token_str = os.environ['TOKEN']
+
+    file_name = '{}_{}_{}'.format(start_date.split(' ')[0], end_date.split(' ')[0], str(time_interval)[31:])
+    print(file_name)
+    path = '../../data/'
+    if not os.path.isdir(path):
+        raise IOError(f'Директория {os.path.abspath(path)} должна существовать')
+    path += file_name + '.csv'
+    if os.path.exists(path):
+        print(f'Существующий файл {os.path.abspath(path)} будет перезаписан после окончания загрузки')
 
     result_df = asyncio.run(load_moex_data(token_str, start_date, end_date, time_interval))
-    result_df.to_csv("data/24_01-10_moex-vix-4hour.csv", index=False, sep=',', encoding='utf-8')
+    result_df.to_csv(path, index=False, sep=',', encoding='utf-8')
