@@ -2,8 +2,6 @@ import numpy as np
 import pandas as pd
 from stockstats import StockDataFrame as Sdf
 
-from src.data_engine.utils import check_file_path
-
 INDICATORS = (
     "macd",  # Moving Average Convergence Divergence (стандартный)
     "macds",  # MACD Signal
@@ -23,7 +21,7 @@ INDICATORS = (
     "cci_14",  # Commodity Channel Index с периодом 14
     "stochrsi",  # Стохастический RSI
     "wr_14",  # Williams %R с периодом 14
-    "vr_6",  # Volume Ratio с периодом 6
+    # "vr_6",  # Volume Ratio с периодом 6 todo почему то получаются бесконечности, надо разобраться
     "pdi",  # +DI индикатор
     "ndi",  # -DI индикатор
     "trix",  # Trix индикатор с периодом 9
@@ -131,17 +129,3 @@ def add_turbulence_feature(data):
     df = df.merge(turbulence_index, on="date")
     df = df.sort_values(["date", "tic"]).reset_index(drop=True)
     return df
-
-
-if __name__ == '__main__':
-    name = '2024-01-01_2024-09-28_DAY'
-    result_df = pd.read_csv(f'../../data/pre/{name}_preprocess.csv')
-
-    out_path = f'../../data/pre/{name}_preprocess.csv'
-    check_file_path(out_path)
-
-    add_technical_indicator(result_df)
-    add_turbulence_feature(result_df)
-    add_return_lag_feature(result_df)
-
-    result_df.to_csv(out_path, index=False, encoding='utf-8')

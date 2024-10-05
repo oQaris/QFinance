@@ -1,6 +1,4 @@
-import asyncio
 import decimal
-import os
 
 import pandas as pd
 from tinkoff.invest import AsyncClient, CandleInterval, InstrumentShort
@@ -10,7 +8,7 @@ from tinkoff.invest import RealExchange
 from tinkoff.invest.async_services import AsyncServices
 from tqdm import tqdm
 
-from src.data_engine.utils import check_file_path, string_to_utc_datetime, datetime_to_utc_string
+from src.data_engine.utils import string_to_utc_datetime, datetime_to_utc_string
 
 
 # https://tinkoff.github.io/investAPI/faq_custom_types/
@@ -79,21 +77,3 @@ async def load_moex_data(token, start: str, end: str, interval: CandleInterval):
             acc = pd.concat([acc, await load_candles_instr(client, instr, start, end, interval)])
 
     return acc
-
-
-if __name__ == '__main__':
-    # токен для Invest API должен быть в этой переменной окружения
-    # https://www.tbank.ru/invest/settings/api/
-    token_str = os.environ['TOKEN']
-    # должно быть в формате utils/DATE_FORMAT
-    start_date = '2010-01-01 00:00:00'
-    end_date = '2024-10-01 19:00:00'
-    time_interval = CandleInterval.CANDLE_INTERVAL_MONTH
-
-    file_name = '{}_{}_{}'.format(start_date.split(' ')[0], end_date.split(' ')[0], str(time_interval)[31:])
-    print(file_name)
-    out_path = '../../data/raw' + file_name + '.csv'
-    check_file_path(out_path)
-
-    result_df = asyncio.run(load_moex_data(token_str, start_date, end_date, time_interval))
-    result_df.to_csv(out_path, index=False, encoding='utf-8')

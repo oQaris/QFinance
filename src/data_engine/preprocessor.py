@@ -1,8 +1,3 @@
-import pandas as pd
-
-from src.data_engine.utils import check_file_path
-
-
 def fill_missing_dates_simple(group, dates):
     return group.set_index('date') \
         .reindex(dates) \
@@ -35,12 +30,17 @@ def fill_missing_dates_expert(group, dates):
     return filled_group.ffill().bfill()
 
 
-if __name__ == '__main__':
-    name = '2024-01-01_2024-09-28_DAY'
-    df = pd.read_csv(f'../../data/raw/{name}.csv')
+def preprocess_dataframe(df_input):
+    df = df_input.copy()
 
-    out_path = f'../../data/pre/{name}_preprocess.csv'
-    check_file_path(out_path)
+    # Транспонирование VIX
+
+    vix_data = df[df['tic'] == 'VIX'][['date', 'close']].rename(columns={'close': 'vix'})
+    if len(vix_data) == 0:
+        raise ValueError('В датасете отсутствует VIX')
+    df = df.merge(vix_data, on='date', how='left')
+    df = df[df['tic'] != 'VIX']
+    print('VIX транспонирован, остались столбцы:\n', df.columns.tolist())
 
     # Удаление тикеров с недостатком данных
 
@@ -58,7 +58,6 @@ if __name__ == '__main__':
     # Удаление дубликатов
 
     duplicates = df[df.duplicated(subset=['tic', 'date'], keep=False)]
-
     if not duplicates.empty:
         unique_values = duplicates.groupby(['tic', 'date']) \
             .apply(lambda x: x.nunique())
@@ -68,7 +67,7 @@ if __name__ == '__main__':
 
     len_old = len(df)
     df = df.drop_duplicates(subset=['tic', 'date'])
-    print(f'Удалено {len_old - len(df)} дубликатов')
+    print(f'Удалено {len_old - len(df)} дубликатов\n')
 
     # Заполнение пропусков по датам
 
@@ -83,19 +82,8 @@ if __name__ == '__main__':
         .drop(columns='level_1')
     print(f'Заполнено {len(df) - len_old} пропусков дат')
 
-    # Транспонирование VIX
-
-    vix_data = df[df['tic'] == 'VIX'][['date', 'close']].rename(columns={'close': 'vix'})
-    if len(vix_data) == 0:
-        raise ValueError('В датасете отсутствует VIX')
-    df = df.merge(vix_data, on='date', how='left')
-    df = df[df['tic'] != 'VIX']
-    print('VIX транспонирован, остались столбцы:\n', df.columns.tolist())
-
     print()
     print(df['tic'].value_counts())
     print()
     print(df.head())
-
-    # Сохранение датасета
-    df.to_csv(out_path, index=False, encoding='utf-8')
+    return df
