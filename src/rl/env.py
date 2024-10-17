@@ -8,7 +8,7 @@ import pandas as pd
 import quantstats as qs
 from gymnasium import spaces
 
-from src.rl.algs.distributor import distribute_optimally
+from src.rl.algs.distributor import discrete_allocation
 
 
 def _softmax_normalization(actions):
@@ -248,7 +248,7 @@ class PortfolioOptimizationEnv(gym.Env):
 
     def calc_fee_portfolio(self, price, weights, multipliers, reserved):
         to_distribute = self._portfolio_value - reserved
-        real_values = distribute_optimally(weights, multipliers, to_distribute)
+        real_values = discrete_allocation(weights, multipliers, to_distribute)
         if real_values.sum() > to_distribute:
             raise ValueError('error distribute_optimally')
         real_values[0] += (reserved + to_distribute - real_values.sum())  # Нераспределённый остаток

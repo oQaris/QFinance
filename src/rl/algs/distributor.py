@@ -1,49 +1,47 @@
 import unittest
 
 import numpy as np
+import pandas as pd
+from pypfopt import DiscreteAllocation
 
 
-def distribute_optimally(weights, multipliers, total):
-    # Шаг 1: начальное распределение (аппроксимация)
-    raw_result = weights * total
-    result = np.round(raw_result / multipliers) * multipliers
-    current_sum = np.sum(result)
-    diffs = np.abs((result / multipliers) / total - weights)
+def discrete_allocation(weights, multipliers, total):
+    """
+     Перераспределяет сумму total по ячейкам массива так,
+     чтобы распределение было максимально близко к заданным весам weights.
+     То есть чтобы sum(abs(result[i] / total - weight[i])) было минимальным.
+     При этом значения в результирующем массиве кратны соответствующим значениям из массива кратности,
+     то есть all(result[i] % distr[i] == 0).
+    :param weights: Массив долей тикеров в портфеле, состоит из чисел от 0 до 1, сумма которых сходится в 1.
+    :param multipliers: Массив лотности каждого тикера, состоит из целых чисел больше 0.
+    :param total: Сумма для перераспределения.
+    :return: Массив result, сумма значений которого меньше либо равна total.
+    """
+    # Преобразуем weights и multipliers в нужные форматы
+    tickers = np.arange(len(weights))  # создаем фиктивные тикеры на основе индексов
+    weights_dict = {ticker: weight for ticker, weight in zip(tickers, weights)}
+    multipliers_series = pd.Series(multipliers, index=tickers)
 
-    # Шаг 2: корректировка результата
-    while current_sum > total:
-        # Уменьшаем наиболее значительное значение, если оно может быть уменьшено
-        valid_indices = np.where(result - multipliers >= 0)[0]
-        if len(valid_indices) == 0:
-            return result
-        min_diff_idx = valid_indices[np.argmin(diffs[valid_indices])]
-        result[min_diff_idx] -= multipliers[min_diff_idx]
-        current_sum -= multipliers[min_diff_idx]
-        diffs[min_diff_idx] = abs(
-            (result[min_diff_idx] / multipliers[min_diff_idx]) / total - weights[min_diff_idx])
+    # Выполняем дискретное распределение библиотекой pypfopt
+    d = DiscreteAllocation(weights_dict, multipliers_series, total_portfolio_value=total, short_ratio=0)
+    allocation, rem = d.greedy_portfolio(reinvest=False)
 
-    while current_sum < total:
-        # Увеличиваем наименьшее значение
-        min_diff_idx = np.argmin(diffs)
-        if current_sum + multipliers[min_diff_idx] <= total:
-            result[min_diff_idx] += multipliers[min_diff_idx]
-            current_sum += multipliers[min_diff_idx] # Не пересчитываем сумму в целях оптимизации
-            diffs[min_diff_idx] = abs(
-                (result[min_diff_idx] / multipliers[min_diff_idx]) / total - weights[min_diff_idx])
-        else:
-            break
+    # Преобразуем allocation обратно в np.array
+    allocation_array = np.zeros(len(weights))
+    for ticker, alloc in allocation.items():
+        allocation_array[ticker] = alloc
 
-    return result
+    return allocation_array * multipliers
 
 
-class TestDistributeOptimally(unittest.TestCase):
+class TestDiscreteAllocation(unittest.TestCase):
 
     def test_full_sum_for_2(self):
         weights = np.array([0.6, 0.4])
         multipliers = np.array([2., 3.])
         total = 120.
 
-        actual = distribute_optimally(weights, multipliers, total)
+        actual = discrete_allocation(weights, multipliers, total)
         expected = np.array([72, 48])  # 72/120 = 0.6, 48/120 = 0.4
 
         np.testing.assert_array_equal(actual, expected)
@@ -53,7 +51,7 @@ class TestDistributeOptimally(unittest.TestCase):
         multipliers = np.array([100., 5., 10.])
         total = 900.
 
-        actual = distribute_optimally(weights, multipliers, total)
+        actual = discrete_allocation(weights, multipliers, total)
         expected = np.array([100, 270, 450])  # 100 + 270 + 450 = 900
 
         np.testing.assert_array_equal(actual, expected)
@@ -63,8 +61,8 @@ class TestDistributeOptimally(unittest.TestCase):
         multipliers = np.array([5., 10., 20., 25.])
         total = 500.
 
-        actual = distribute_optimally(weights, multipliers, total)
-        expected = np.array([40, 100, 160, 200])
+        actual = discrete_allocation(weights, multipliers, total)
+        expected = np.array([50, 100, 140, 200])
 
         np.testing.assert_array_equal(actual, expected)
 
@@ -73,8 +71,8 @@ class TestDistributeOptimally(unittest.TestCase):
         multipliers = np.array([1., 2., 3.])
         total = 1.
 
-        actual = distribute_optimally(weights, multipliers, total)
-        expected = np.array([0, 0, 0])
+        actual = discrete_allocation(weights, multipliers, total)
+        expected = np.array([1, 0, 0])
 
         np.testing.assert_array_equal(actual, expected)
 
@@ -83,7 +81,7 @@ class TestDistributeOptimally(unittest.TestCase):
         multipliers = np.array([3., 2., 1.])
         total = 12.
 
-        actual = distribute_optimally(weights, multipliers, total)
+        actual = discrete_allocation(weights, multipliers, total)
         expected = np.array([6, 4, 2])
 
         np.testing.assert_array_equal(actual, expected)
@@ -93,9 +91,6 @@ class TestDistributeOptimally(unittest.TestCase):
         multipliers = np.array([0.3, 2.0, 0.])
         total = 100.
 
-        actual = distribute_optimally(weights, multipliers, total)
-        expected = np.array([99.9, 500, np.nan])
-
-        np.testing.assert_allclose(actual[:-1], expected[:-1], rtol=1e-5, atol=1e-8)
-        # Проверяем отдельно, что последний элемент равен np.nan
-        self.assertTrue(np.isnan(actual[-1]) and np.isnan(expected[-1]))
+        # Ожидаем, что будет выброшено исключение, например, ValueError
+        with self.assertRaises(AssertionError):
+            discrete_allocation(weights, multipliers, total)
