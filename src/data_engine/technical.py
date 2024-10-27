@@ -4,29 +4,20 @@ from stockstats import StockDataFrame as Sdf
 
 INDICATORS = (
     "macd",  # Moving Average Convergence Divergence (стандартный)
-    "macds",  # MACD Signal
     "macdh",  # MACD Histogram
     "rsi_14",  # Relative Strength Index с периодом 14
-    "close_5_sma",  # Simple Moving Average (SMA) с периодом 5
-    "close_10_sma",  # SMA с периодом 10
-    "close_20_sma",  # SMA с периодом 20
-    "close_5_ema",  # Exponential Moving Average (EMA) с периодом 5
-    "close_10_ema",  # EMA с периодом 10
-    "close_20_ema",  # EMA с периодом 20
+    "close_64_sma",  # Simple Moving Average (SMA) с периодом 64
+    "close_64_ema",  # Exponential Moving Average (EMA) с периодом 64
     "boll",  # Средняя полоса Боллинджера
-    "boll_ub",  # Верхняя полоса Боллинджера
-    "boll_lb",  # Нижняя полоса Боллинджера
     "atr_14",  # Average True Range с периодом 14
     "adx",  # Average Directional Index с периодом 14
     "cci_14",  # Commodity Channel Index с периодом 14
     "stochrsi",  # Стохастический RSI
     "wr_14",  # Williams %R с периодом 14
-    # "vr_6",  # Volume Ratio с периодом 6 todo почему то получаются бесконечности, надо разобраться
     "pdi",  # +DI индикатор
     "ndi",  # -DI индикатор
     "trix",  # Trix индикатор с периодом 9
     "dma",  # Demand Index
-    "vwma",  # Volume Weighted Moving Average
     "cmo",  # Моментум с периодом 14
     "close_14_roc"  # Rate of Change (Темп изменения)
 )
@@ -42,6 +33,7 @@ def add_technical_indicator(data, indicator_list=INDICATORS):
     unique_ticker = stock.tic.unique()
 
     for indicator in indicator_list:
+        print(f'process {indicator}')
         indicator_df = pd.DataFrame()
         for i in range(len(unique_ticker)):
             try:
@@ -128,4 +120,39 @@ def add_turbulence_feature(data):
 
     df = df.merge(turbulence_index, on="date")
     df = df.sort_values(["date", "tic"]).reset_index(drop=True)
+    return df
+
+
+def add_time_features(data):
+    """
+    Выделить из даты компоненты и преобразовать временные метки в периодические признаки
+    """
+    df = data.copy()
+    date = pd.to_datetime(df['date'])
+
+    month = date.dt.month
+    day = date.dt.day
+    day_of_week = date.dt.dayofweek
+    hour = date.dt.hour
+    minute = date.dt.minute
+
+    # Применение тригонометрических преобразований
+    df['month_sin'] = np.sin(2 * np.pi * month / 12)
+    df['month_cos'] = np.cos(2 * np.pi * month / 12)
+
+    df['day_sin'] = np.sin(2 * np.pi * day / 31)  # 31 день в максимальном месяце
+    df['day_cos'] = np.cos(2 * np.pi * day / 31)
+
+    df['day_of_week_sin'] = np.sin(2 * np.pi * day_of_week / 7)
+    df['day_of_week_cos'] = np.cos(2 * np.pi * day_of_week / 7)
+
+    df['hour_sin'] = np.sin(2 * np.pi * hour / 24)
+    df['hour_cos'] = np.cos(2 * np.pi * hour / 24)
+
+    df['minute_sin'] = np.sin(2 * np.pi * minute / 60)
+    df['minute_cos'] = np.cos(2 * np.pi * minute / 60)
+
+    # Удаление столбцов, значения в которых одинаковые (если дата содержит только дни)
+    cols_to_drop = [col for col in df.columns if df[col].nunique() == 1]
+    df.drop(columns=cols_to_drop, inplace=True)
     return df
