@@ -3,14 +3,6 @@ import pandas as pd
 DATE_FORMAT = '%Y-%m-%d %H:%M:%S'
 
 
-def load_all():
-    train = pd.read_csv("data_new/24_01-10_moex-vix-4hour_filled_preprocessed.csv", sep=',')
-    # train = train.set_index('tic')
-    # train.index.names = ['']
-
-    return train
-
-
 def get_start_end_dates(dataset):
     dates = pd.to_datetime(dataset['date'], format=DATE_FORMAT)
 
