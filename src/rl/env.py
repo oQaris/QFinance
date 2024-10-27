@@ -8,19 +8,7 @@ import pandas as pd
 import quantstats as qs
 from gymnasium import spaces
 
-from src.rl.algs.distributor import discrete_allocation
-
-
-def _softmax_normalization(actions):
-    """Normalizes the action vector using softmax function.
-
-    Returns:
-        Normalized action vector (portfolio vector).
-    """
-    numerator = np.exp(actions)
-    denominator = np.sum(np.exp(actions))
-    softmax_output = numerator / denominator
-    return softmax_output
+from src.rl.algs.distributor import discrete_allocation_custom
 
 
 def _custom_softmax(x):
@@ -36,28 +24,27 @@ def _custom_softmax(x):
     return result
 
 
-def _sum_normalization(actions):
-    return actions / np.sum(actions)
-
-
 class PortfolioOptimizationEnv(gym.Env):
 
     def __init__(
             self,
             df,
             initial_amount,
-            normalize_df='by_previous_time',
-            reward_scaling=1,
-            comission_fee_model='trf',
-            comission_fee_pct=0,
-            features=['close', 'high', 'low'],
-            valuation_feature='close',
+            window_features=['close', 'high', 'low', 'volume'],
+            indicators_features=['macd', 'rsi_14', 'adx', 'return_lag_7', 'P/E', 'EV/EBITDA'],
+            time_features=['vix', 'turbulence'],
+            valuation_column='price',
             time_column='date',
             tic_column='tic',
-            tics_in_portfolio='all',
-            time_window=50,
-            verbose=False,
+            lot_column='lot',
+            time_window=64,
+            normalize_df=None,
+            reward_scaling=1,
+            comission_fee_pct=0.003,
+            verbose=0,
     ):
+        self._state = None
+        self._info = None
         self.commission_paid = 0
         self.num_of_transactions = 0
         self._reward = 0
@@ -69,124 +56,138 @@ class PortfolioOptimizationEnv(gym.Env):
         self._initial_amount = initial_amount
         self._reward_scaling = reward_scaling
         self._comission_fee_pct = comission_fee_pct
-        self._comission_fee_model = comission_fee_model
-        self._features = features
-        self._valuation_feature = valuation_feature
+        self._window_features = window_features
+        self._indicators_features = indicators_features
+        self._time_features = time_features
+        self._valuation_column = valuation_column
+        self._lot_column = lot_column
+
         self._verbose = verbose
         # initialize price variation
         self._df_price_variation = None
         # preprocess data
-        self._preprocess_data(normalize_df, tics_in_portfolio)
+        self._preprocess_data(normalize_df)
         # dims and spaces
         self._tic_list = self._df[self._tic_column].unique()
-        self.portfolio_size = (
-            len(self._tic_list)
-            if tics_in_portfolio == 'all'
-            else len(tics_in_portfolio)
-        )
+        self.portfolio_size = len(self._tic_list)
         # sort datetimes and define episode length
         self._sorted_times = sorted(set(self._df[time_column]))
         self.episode_length = len(self._sorted_times) - time_window + 1
 
         self._portfolio_value = self._initial_amount
         self._terminal = False
+
         # Необходимо для OpenAI Gym
-        action_space = 1 + self.portfolio_size
-        self.action_space = spaces.Box(low=0, high=1, shape=(action_space,))
-        self.observation_space = spaces.Box(
-            low=-np.inf,
-            high=np.inf,
-            shape=(len(self._features), len(self._tic_list), self._time_window),
-        )
+        self.action_space = spaces.Box(low=0, high=1, shape=(self.portfolio_size + 1,), dtype=np.float32)
+        self.observation_space = spaces.Dict({
+            'price_data': spaces.Box(
+                low=-np.inf, high=np.inf, shape=(len(self._window_features), self.portfolio_size, self._time_window),
+                dtype=np.float32
+            ),
+            'indicators': spaces.Box(
+                low=-np.inf, high=np.inf, shape=(self.portfolio_size, len(self._indicators_features)), dtype=np.float32
+            ),
+            'common_data': spaces.Box(
+                low=-np.inf, high=np.inf, shape=(len(self._time_features),), dtype=np.float32
+            ),
+            'portfolio_dist': spaces.Box(
+                low=0, high=1, shape=(self.portfolio_size + 1,), dtype=np.float32
+            )
+        })
         self._reset_memory()
         self.tic_indices_cache = {
             tic: self._df[self._tic_column] == tic
             for tic in self._tic_list
         }
 
+    def get_terminal_stats(self):
+        metrics_df = pd.DataFrame({
+            'date': self._date_memory,
+            'returns': self._portfolio_return_memory,
+            'portfolio_values': self._asset_memory['final'],
+        })
+        metrics_df.set_index('date', inplace=True)
+
+        profit = self._portfolio_value / self._initial_amount
+        max_draw_down = qs.stats.max_drawdown(metrics_df['portfolio_values'])
+        sharpe_ratio = qs.stats.sharpe(metrics_df['returns'])
+        fee_ratio = self.commission_paid / self._initial_amount
+
+        return profit, max_draw_down, sharpe_ratio, fee_ratio, self.num_of_transactions
+
     def step(self, actions):
         self._terminal = self._time_index >= len(self._sorted_times) - 1
 
         if self._terminal:
-            metrics_df = pd.DataFrame(
-                {
-                    'date': self._date_memory,
-                    'returns': self._portfolio_return_memory,
-                    'portfolio_values': self._asset_memory['final'],
-                }
-            )
-            metrics_df.set_index('date', inplace=True)
-            print('=================================')
+            if self._verbose < 1:
+                return self._state, self._reward, self._terminal, False, self._info
+
+            profit, max_draw_down, sharpe_ratio, fee_ratio, num_of_transactions = self.get_terminal_stats()
+            print('\n=================================')
             print('Initial portfolio value:{}'.format(self._asset_memory['final'][0]))
             print(f'Final portfolio value: {self._portfolio_value}')
-            print(
-                'Final accumulative portfolio value: {}'.format(
-                    self._portfolio_value / self._asset_memory['final'][0]
-                )
-            )
-            print(
-                'Maximum DrawDown: {}'.format(
-                    qs.stats.max_drawdown(metrics_df['portfolio_values'])
-                )
-            )
-            print('Sharpe ratio: {}'.format(qs.stats.sharpe(metrics_df['returns'])))
-            print('Commission paid: {}'.format(self.commission_paid))
-            print('Number of transactions: {}'.format(self.num_of_transactions))
+            print(f'Final accumulative portfolio value: {profit}')
+            print(f'Maximum DrawDown: {max_draw_down}')
+            print(f'Sharpe ratio: {sharpe_ratio}')
+            print(f'Commission paid: {self.commission_paid}')
+            print(f'Commission ratio: {fee_ratio}')
+            print(f'Number of transactions: {num_of_transactions}')
             print('=================================')
             return self._state, self._reward, self._terminal, False, self._info
 
+        # transform action to numpy array (if it's a list)
+        actions = np.array(actions, dtype=np.float32)
+
+        # if necessary, normalize weights
+        if math.isclose(np.sum(actions), 1, abs_tol=1e-6) and np.min(actions) >= 0:
+            weights = actions
         else:
-            # transform action to numpy array (if it's a list)
-            actions = np.array(actions, dtype=np.float32)
+            # print('_custom_softmax')
+            weights = _custom_softmax(actions)
 
-            # if necessary, normalize weights
-            if math.isclose(np.sum(actions), 1, abs_tol=1e-6) and np.min(actions) >= 0:
-                weights = actions
-            else:
-                weights = _custom_softmax(actions)
+        # save initial portfolio weights for this time step
+        self._actions_memory.append(weights)
 
-            # save initial portfolio weights for this time step
-            self._actions_memory.append(weights)
+        # get last step final weights and portfolio_value
+        current_portfolio, fee = self._rebalance_portfolio(weights)  # weights*self._portfolio_value, 1000
+        self.commission_paid += fee
+        self._portfolio_value = current_portfolio.sum()
 
-            # get last step final weights and portfolio_value
-            current_portfolio, comission = self._rebalance_portfolio(weights)  # weights*self._portfolio_value, 1000 #
-            self.commission_paid += comission
-            self._portfolio_value = current_portfolio.sum()
+        # save initial portfolio value of this time step
+        self._asset_memory['initial'].append(self._portfolio_value)
 
-            # save initial portfolio value of this time step
-            self._asset_memory['initial'].append(self._portfolio_value)
+        # load next state
+        self._time_index += 1
+        # calc _price_variation
+        self._state, self._info = self._get_state_and_info_from_time_index(self._time_index)
+        self._info['trf_mu'] = 1 - (fee / self._portfolio_value)
 
-            # load next state
-            self._time_index += 1
-            # calc _price_variation
-            self._state, self._info = self._get_state_and_info_from_time_index(self._time_index)
-            self._info['trf_mu'] = 1 - (comission / self._portfolio_value)
+        # time passes and time variation changes the portfolio distribution
+        new_portfolio = current_portfolio * self._price_variation
 
-            # time passes and time variation changes the portfolio distribution
-            new_portfolio = current_portfolio * self._price_variation
+        # calculate new portfolio value and weights
+        self._portfolio_value = np.sum(new_portfolio)
+        final_weights = new_portfolio / self._portfolio_value
+        self._info['real_weights'] = final_weights
+        self._info['portfolio_dist'] = final_weights
 
-            # calculate new portfolio value and weights
-            self._portfolio_value = np.sum(new_portfolio)
-            final_weights = new_portfolio / self._portfolio_value
-            self._info['real_weights'] = final_weights
+        # save final portfolio value and weights of this time step
+        self._asset_memory['final'].append(self._portfolio_value)
+        self._final_weights.append(final_weights)
 
-            # save final portfolio value and weights of this time step
-            self._asset_memory['final'].append(self._portfolio_value)
-            self._final_weights.append(final_weights)
+        # save date memory
+        self._date_memory.append(self._info['end_time'])
 
-            # save date memory
-            self._date_memory.append(self._info['end_time'])
+        # define portfolio return
+        rate_of_return = self._asset_memory['final'][-1] / self._asset_memory['final'][-2]
+        portfolio_return = rate_of_return - 1
 
-            # define portfolio return
-            rate_of_return = self._asset_memory['final'][-1] / self._asset_memory['final'][-2]
-            portfolio_return = rate_of_return - 1
+        # save portfolio return memory
+        self._portfolio_return_memory.append(portfolio_return)
 
-            # save portfolio return memory
-            self._portfolio_return_memory.append(portfolio_return)
-
-            # Define portfolio return
-            self._reward = portfolio_return
-            self._reward = self._reward * self._reward_scaling
+        # Define portfolio return
+        self._reward = portfolio_return
+        self._reward = self._reward * self._reward_scaling
 
         return self._state, self._reward, self._terminal, False, self._info
 
@@ -194,17 +195,17 @@ class PortfolioOptimizationEnv(gym.Env):
         tic_counts = self._tic_counts_memory[-1]
         diff_tic_counts = tic_counts - self._tic_counts_memory[-2]
         date = self._sorted_times[self._time_index]
-        nonzero_indices = np.nonzero(diff_tic_counts)[0]
+        transactions = np.nonzero(diff_tic_counts)[0]
         tics = self._df['tic'].unique()
-        for idx in nonzero_indices:
+        for idx in transactions:
             elem = diff_tic_counts[idx]
             self.num_of_transactions += 1
-            if self._verbose:
+            if self._verbose > 1:
                 if elem > 0:
                     print(f'{date}: куплено {elem} акций {tics[idx]}')
                 elif elem < 0:
                     print(f'{date}: продано {-elem} акций {tics[idx]}')
-        if self._verbose:
+        if self._verbose > 1 and len(transactions) > 0:
             print(f'Открыто {len(np.nonzero(tic_counts)[0])} позиций:')
             for idx in np.nonzero(tic_counts)[0]:
                 elem = tic_counts[idx]
@@ -213,30 +214,40 @@ class PortfolioOptimizationEnv(gym.Env):
 
     def _rebalance_portfolio(self, weights):
         """
-        Рассчитывает количество акций для ребалансировки портфеля.
+        Перераспределяет денежные средства на основе новых весов портфеля и лотности акций.
 
         :param weights: одномерный массив NumPy, где 0-й элемент — это доля денежных средств,
                         а остальные элементы — это доля по каждой акции.
 
-        :return: Новая распределённая стоимость портфеля + уже учтённая в нём комиссия
+        :return: Новая распределённая стоимость портфеля (на основе self._portfolio_value) + уже учтённая в нём комиссия
         """
+        wsum = weights.sum()
+        if wsum > 1:
+            # print('bad weights sum', weights.sum())
+            weights /= wsum
         data_slice = self._df[
             (self._df[self._time_column] == self._sorted_times[self._time_index])
         ].set_index('tic')
 
         # В начале - денежные средства
-        price = np.array([1.0] + data_slice['close_orig'].tolist())
-        lot_size = np.array([1.0] + data_slice['lot'].tolist())
+        price = np.array([1.0] + data_slice[self._valuation_column].tolist())
+        lot_size = np.array([1.0] + data_slice[self._lot_column].tolist())  # Рубли можем дробить на копейки
         multipliers = price * lot_size
 
-        comission = 0
+        # Смысл цикла в том, что сперва пытаемся распределить портфель вообще без резервирования денег на комиссию.
+        # Такая ситуация допустима, если веса портфеля не менялись.
+        # После первой итерации fee содержит необходимые средства для перебалансировки (комиссию),
+        # их резервируем и запускаем балансировку ещё раз, т.к. доступные средства уменьшились.
+        # В большинстве случаев распределение меньшей суммы денег съедает меньше комиссии, но не всегда,
+        # поэтому не можем гарантировать, что цикл завершится за 2 итерации.
+        fee = 0
         counter = 0
         while True:
             counter += 1
-            if counter > 3:
-                print('что то не так')
-            real_values, comission, tic_counts = self.calc_fee_portfolio(price, weights, multipliers, comission)
-            rest_cash = real_values[0] - comission
+            if counter > 2:
+                print(f'Warning: too much rebalancing ({counter}).')
+            real_values, fee, tic_counts = self._allocate_with_fee(price, weights, multipliers, fee)
+            rest_cash = real_values[0] - fee
             if rest_cash >= 0:
                 break
 
@@ -244,24 +255,29 @@ class PortfolioOptimizationEnv(gym.Env):
         self.eval_trades(rest_cash)
 
         real_values[0] = rest_cash
-        return real_values, comission
+        return real_values, fee
 
-    def calc_fee_portfolio(self, price, weights, multipliers, reserved):
+    def _allocate_with_fee(self, price, weights, multipliers, reserved):
+        value_before = self._portfolio_value
+
         to_distribute = self._portfolio_value - reserved
-        real_values = discrete_allocation(weights, multipliers, to_distribute)
+        real_values = discrete_allocation_custom(weights, multipliers, to_distribute)
         if real_values.sum() > to_distribute:
-            raise ValueError('error distribute_optimally')
+            raise ValueError('Error discrete allocation.')
         real_values[0] += (reserved + to_distribute - real_values.sum())  # Нераспределённый остаток
 
-        # Считаем количество тикеров акций (без учёта кеша)
+        # Считаем количество тикеров (без учёта кеша)
         tic_counts = np.array([int(np.round(x)) for x in (real_values[1:] / price[1:])])
         diff_tic_counts = tic_counts - self._tic_counts_memory[-1]
 
         # Расчёт комиссии за сделки
         turnover = (np.abs(diff_tic_counts) * price[1:]).sum()
-        comission = turnover * self._comission_fee_pct
+        fee = turnover * self._comission_fee_pct
 
-        return real_values, comission, tic_counts
+        if abs(value_before - real_values.sum()) > 1e-5:
+            raise ValueError(
+                f'Portfolio size is not the same before ({value_before}) and after ({real_values.sum()}) allocation.')
+        return real_values, fee, tic_counts
 
     def reset(self, seed=None, options=None):
         self.commission_paid = 0
@@ -271,53 +287,54 @@ class PortfolioOptimizationEnv(gym.Env):
         self._time_index = self._time_window - 1
         self._reset_memory()
 
-        self._state, self._info = self._get_state_and_info_from_time_index(
-            self._time_index
-        )
+        self._state, self._info = self._get_state_and_info_from_time_index(self._time_index)
         self._portfolio_value = self._initial_amount
         self._terminal = False
 
         return self._state, self._info
 
     def _get_state_and_info_from_time_index(self, time_index):
-        # returns state in form (channels, tics, timesteps)
+        # Определение временного диапазона
         end_time = self._sorted_times[time_index]
         start_time = self._sorted_times[time_index - (self._time_window - 1)]
 
-        # define data to be used in this time step
+        # Выбор данных для текущего временного шага
         self._data = self._df[
-            (self._df[self._time_column] >= start_time)
-            & (self._df[self._time_column] <= end_time)
-            ][[self._time_column, self._tic_column] + self._features + ['lot']]
+            (self._df[self._time_column] >= start_time) &
+            (self._df[self._time_column] <= end_time)]
 
-        # define price variation of this time_step
+        # Определение вариации цены для текущего временного шага
         self._price_variation = self._df_price_variation[
             self._df_price_variation[self._time_column] == end_time
-            ][self._valuation_feature].to_numpy()
-        self._price_variation = np.insert(self._price_variation, 0, 1)
+            ][self._valuation_column].to_numpy()
+        self._price_variation = np.insert(self._price_variation, 0, 1)  # Добавляем кеш
 
-        # state = None
-        # tic_indices = {tic: self._data[self._tic_column] == tic for tic in self._tic_list}
-        # for tic in self._tic_list:
-        #     tic_data = self._data.loc[tic_indices[tic], self._features].to_numpy().T
-        #     tic_data = tic_data[..., np.newaxis]
-        #     state = tic_data if state is None else np.append(state, tic_data, axis=2)
+        # Получение данных по тикерам
+        all_tic_data = self._data.set_index(self._tic_column).loc[self._tic_list, self._window_features].to_numpy()
+        all_tic_data = all_tic_data.reshape(len(self._tic_list), len(self._window_features), self._time_window)
 
-        # state = np.empty((len(self._features), self._time_window, len(self._tic_list)))
-        # for i, tic in enumerate(self._tic_list):
-        #     tic_data = self._data.loc[self.tic_indices_cache[tic], self._features].to_numpy().T
-        #     tic_data = np.squeeze(tic_data)  # Убираем ось с длиной 1
-        #     state[:, :, i] = tic_data
+        # Формирование price_data (транспонирование для приведения к нужному формату)
+        # (features, tics, timesteps)
+        price_data = all_tic_data.transpose(1, 0, 2)
 
-        # Выбираем все данные для тикеров за один вызов
-        all_tic_data = self._data.set_index(self._tic_column).loc[self._tic_list, self._features].to_numpy()
-        # Меняем размерность массива для работы с временем и тикерами
-        all_tic_data = all_tic_data.reshape(len(self._tic_list), len(self._features), self._time_window)
-        # Присваиваем данные в state
-        state = all_tic_data.transpose(1, 2, 0)  # Меняем оси, чтобы привести к нужному формату
+        # Извлечение индикаторов для последней даты в окне (end_time) по каждому тикеру
+        last_time_data = self._data[self._data[self._time_column] == end_time]
+        indicators = last_time_data.set_index(self._tic_column).loc[
+            self._tic_list, self._indicators_features].to_numpy()
 
-        # Первая ось - фичи, вторая - тикеры, третья - время
-        state = state.transpose((0, 2, 1))
+        # Извлечение общих данных по рынку
+        # Общие данные предполагаются одинаковыми для всех тикеров
+        common_data = last_time_data[self._time_features].iloc[0].to_numpy()
+
+        # Формирование словаря состояния
+        state = {
+            'price_data': price_data,  # (features, tics, timesteps)
+            'indicators': indicators,  # (tic_count, indicators_num)
+            'common_data': common_data,  # (common_num,)
+            'portfolio_dist': self._final_weights[-1]  # (tic_count + 1,)
+        }
+
+        # Формирование дополнительной информации
         info = {
             'tics': self._tic_list,
             'start_time': start_time,
@@ -329,7 +346,7 @@ class PortfolioOptimizationEnv(gym.Env):
         }
         return state, info
 
-    def _preprocess_data(self, normalize, tics_in_portfolio):
+    def _preprocess_data(self, normalize):
         """Orders and normalizes the environment's dataframe.
 
         Args:
@@ -337,31 +354,18 @@ class PortfolioOptimizationEnv(gym.Env):
                 Possible values are 'by_previous_time', 'by_fist_time_window_value',
                 'by_COLUMN_NAME' (where COLUMN_NAME must be changed to a real column
                 name) and a custom function. If None no normalization is done.
-            tics_in_portfolio: List of ticker symbols to be considered as part of the
-                portfolio. If 'all', all tickers of input data are considered.
         """
         # order time dataframe by tic and time
         self._df = self._df.sort_values(by=[self._tic_column, self._time_column])
         # defining price variation after ordering dataframe
-        self._df_price_variation = self._temporal_variation_df()
-        # select only stocks in portfolio
-        if tics_in_portfolio != 'all':
-            self._df_price_variation = self._df_price_variation[
-                self._df_price_variation[self._tic_column].isin(tics_in_portfolio)
-            ]
+        self._df_price_variation = self._temporal_variation_df()[
+            [self._tic_column, self._time_column, self._valuation_column]]
         # apply normalization
         if normalize:
             self._normalize_dataframe(normalize)
         # transform str to datetime
         self._df[self._time_column] = pd.to_datetime(self._df[self._time_column])
-        self._df_price_variation[self._time_column] = pd.to_datetime(
-            self._df_price_variation[self._time_column]
-        )
-        # transform numeric variables to float32 (compatibility with pytorch)
-        self._df[self._features] = self._df[self._features].astype('float32')
-        self._df_price_variation[self._features] = self._df_price_variation[
-            self._features
-        ].astype('float32')
+        self._df_price_variation[self._time_column] = pd.to_datetime(self._df_price_variation[self._time_column])
 
     def _reset_memory(self):
         """Resets the environment's memory."""
@@ -404,17 +408,17 @@ class PortfolioOptimizationEnv(gym.Env):
             if normalize == 'by_fist_time_window_value':
                 print(
                     'Normalizing {} by first time window value...'.format(
-                        self._features
+                        self._window_features
                     )
                 )
                 self._df = self._temporal_variation_df(self._time_window - 1)
             elif normalize == 'by_previous_time':
-                print(f'Normalizing {self._features} by previous time...')
+                print(f'Normalizing {self._window_features} by previous time...')
                 self._df = self._temporal_variation_df()
             elif normalize.startswith('by_'):
                 normalizer_column = normalize[3:]
-                print(f'Normalizing {self._features} by {normalizer_column}')
-                for column in self._features:
+                print(f'Normalizing {self._window_features} by {normalizer_column}')
+                for column in self._window_features:
                     self._df[column] = self._df[column] / self._df[normalizer_column]
         elif callable(normalize):
             print('Applying custom normalization function...')
@@ -435,7 +439,8 @@ class PortfolioOptimizationEnv(gym.Env):
         """
         df_temporal_variation = self._df.copy()
         prev_columns = []
-        for column in self._features:
+        numeric_cols = df_temporal_variation.select_dtypes(include=[np.number]).columns
+        for column in numeric_cols:
             prev_column = f'prev_{column}'
             prev_columns.append(prev_column)
             df_temporal_variation[prev_column] = df_temporal_variation.groupby(

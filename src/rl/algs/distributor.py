@@ -5,6 +5,34 @@ import pandas as pd
 from pypfopt import DiscreteAllocation
 
 
+def discrete_allocation_custom(weights: np.ndarray, prices: np.ndarray, total_sum: float) -> np.ndarray:
+    # Рассчитываем целевые суммы для каждого актива
+    target_allocations = weights * total_sum
+
+    # Количество акций, которые можно купить по целевой аллокации
+    num_shares = np.floor(target_allocations / prices)
+
+    # Оставшаяся сумма после покупки целого числа акций
+    remaining_sum = total_sum - np.sum(num_shares * prices)
+
+    # Жадно добавляем акции до тех пор, пока не потратим всю оставшуюся сумму
+    while remaining_sum > 0:
+        # Рассчитываем ошибки для каждого актива между целевой и реальной аллокацией
+        allocation_error = (target_allocations - num_shares * prices) / prices
+
+        # Находим индекс актива с максимальной ошибкой
+        best = np.argmax(allocation_error)
+
+        # Если можем купить ещё одну акцию этого актива, покупаем
+        if prices[best] <= remaining_sum and weights[best] != 0:
+            num_shares[best] += 1
+            remaining_sum -= prices[best]
+        else:
+            break
+
+    return num_shares * prices
+
+
 def discrete_allocation(weights, multipliers, total):
     """
      Перераспределяет сумму total по ячейкам массива так,
@@ -24,7 +52,7 @@ def discrete_allocation(weights, multipliers, total):
 
     # Выполняем дискретное распределение библиотекой pypfopt
     d = DiscreteAllocation(weights_dict, multipliers_series, total_portfolio_value=total, short_ratio=0)
-    allocation, rem = d.greedy_portfolio(reinvest=False)
+    allocation, rem = d.greedy_portfolio(reinvest=False, verbose=False)
 
     # Преобразуем allocation обратно в np.array
     allocation_array = np.zeros(len(weights))
@@ -41,7 +69,7 @@ class TestDiscreteAllocation(unittest.TestCase):
         multipliers = np.array([2., 3.])
         total = 120.
 
-        actual = discrete_allocation(weights, multipliers, total)
+        actual = discrete_allocation_custom(weights, multipliers, total)
         expected = np.array([72, 48])  # 72/120 = 0.6, 48/120 = 0.4
 
         np.testing.assert_array_equal(actual, expected)
@@ -51,8 +79,8 @@ class TestDiscreteAllocation(unittest.TestCase):
         multipliers = np.array([100., 5., 10.])
         total = 900.
 
-        actual = discrete_allocation(weights, multipliers, total)
-        expected = np.array([100, 270, 450])  # 100 + 270 + 450 = 900
+        actual = discrete_allocation_custom(weights, multipliers, total)
+        expected = np.array([100, 270, 450])  # 100 + 270 + 450 = 820
 
         np.testing.assert_array_equal(actual, expected)
 
@@ -61,7 +89,7 @@ class TestDiscreteAllocation(unittest.TestCase):
         multipliers = np.array([5., 10., 20., 25.])
         total = 500.
 
-        actual = discrete_allocation(weights, multipliers, total)
+        actual = discrete_allocation_custom(weights, multipliers, total)
         expected = np.array([50, 100, 140, 200])
 
         np.testing.assert_array_equal(actual, expected)
@@ -71,7 +99,7 @@ class TestDiscreteAllocation(unittest.TestCase):
         multipliers = np.array([1., 2., 3.])
         total = 1.
 
-        actual = discrete_allocation(weights, multipliers, total)
+        actual = discrete_allocation_custom(weights, multipliers, total)
         expected = np.array([1, 0, 0])
 
         np.testing.assert_array_equal(actual, expected)
@@ -81,7 +109,7 @@ class TestDiscreteAllocation(unittest.TestCase):
         multipliers = np.array([3., 2., 1.])
         total = 12.
 
-        actual = discrete_allocation(weights, multipliers, total)
+        actual = discrete_allocation_custom(weights, multipliers, total)
         expected = np.array([6, 4, 2])
 
         np.testing.assert_array_equal(actual, expected)
