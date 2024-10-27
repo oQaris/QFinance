@@ -1,47 +1,138 @@
-import pandas as pd
-from stable_baselines3 import PPO
+from typing import Callable
 
+import pandas as pd
+import torch
+from pandas import DataFrame
+from stable_baselines3 import PPO, SAC
+
+from src.rl.architectures.rnn import RNNPolicyNetwork
+from src.rl.callbacks import EnvTerminalStatsLoggingCallback
 from src.rl.env import PortfolioOptimizationEnv
 from src.rl.loaders import split
+from src.rl.models import PolicyGradient
+from src.rl.policy import CustomActorCriticPolicy
 
-time_window = 100
+time_window = 16
 
 
 def load_dataset():
-    dataset = pd.read_csv('C:/Users/oQaris/Desktop/Git/QFinance/data/pre/2023-10-01_2024-10-04_DAY_final.csv', sep=',')
-    dataset['close_orig'] = dataset['close'].copy()
+    dataset = pd.read_csv('C:/Users/oQaris/Desktop/Git/QFinance/data/pre/last_top_data_preprocess_norm_time.csv')
     return split(dataset, train_ratio=0.8, stratification=time_window)
 
 
-def build_env(dataset):
-    features = ['open',
-                'close',
-                'high',
-                'low',
-                'volume']
+def build_env(dataset: DataFrame, verbose=0):
+    allux_cols = ['date', 'tic', 'lot', 'price']
+    window_features = ['open',
+                       'close',
+                       'high',
+                       'low',
+                       'volume']
+    time_features = ['vix'] + [f for f in dataset.columns if f.endswith('_sin') or f.endswith('_cos')]
+    indicators = [f for f in dataset.columns if
+                  f not in allux_cols and f not in window_features and f not in time_features][1:]
     env_kwargs = {
         'initial_amount': 1000000,
         'comission_fee_pct': 0.003,
-        # 'return_last_action':True,
         'time_window': time_window,
-        'features': features,
-        # 'normalize_df': 'by_fist_time_window_value',
-        'normalize_df': None,
+        'window_features': window_features,
+        'time_features': time_features,
+        'indicators_features': indicators,
+        'normalize_df': None,  # or 'by_fist_time_window_value',
+        'verbose': verbose
     }
-    return PortfolioOptimizationEnv(
-        dataset,
-        **env_kwargs
+    env = PortfolioOptimizationEnv(dataset, **env_kwargs)
+    # check_env(env)
+    return env
+
+
+def linear_schedule(initial_value: float) -> Callable[[float], float]:
+    """
+    Создает линейный планировщик для изменения значения.
+    :param initial_value: начальное значение, например, начальный learning rate.
+    :return: функция, принимающая текущий прогресс (от 1 до 0) и возвращающая значение learning rate.
+    """
+
+    def schedule(progress_remaining: float) -> float:
+        """
+        Возвращает значение параметра в зависимости от оставшегося прогресса.
+        :param progress_remaining: оставшийся прогресс обучения (от 1.0 до 0.0).
+        :return: текущее значение параметра (learning rate).
+        """
+        return progress_remaining * initial_value
+
+    return schedule
+
+
+def train_PG(env_train):
+    agent = PolicyGradient(env_train,
+                           policy_kwargs=dict(time_window=time_window,
+                                              initial_features=len(env_train._window_features)))
+    try:
+        agent.train(episodes=500)
+    except KeyboardInterrupt:
+        print("Обучение прервано вручную. Сохраняем модель...")
+    finally:
+        model_path = 'trained_models/policy_EI3.pt'
+        torch.save(agent.train_policy.state_dict(), model_path)
+        print("Модель успешно сохранена.")
+
+
+def train_PPO(env_train):
+    total_timesteps = 1_000_000
+    agent = PPO(
+        policy=CustomActorCriticPolicy,
+        env=env_train,
+        # learning_rate=linear_schedule(0.001),
+        verbose=1,
+        policy_kwargs=dict(policy_network_class=RNNPolicyNetwork),
+        tensorboard_log="./tensorboard_log/"
     )
+    try:
+        agent.learn(
+            total_timesteps=total_timesteps,
+            progress_bar=True
+        )
+    except KeyboardInterrupt:
+        print("Обучение прервано вручную. Сохраняем модель...")
+    finally:
+        agent.save('trained_models/agent_ppo')
+        print("Модель успешно сохранена.")
+
+
+def train_SAC(env_train):
+    # Separate evaluation env
+    # eval_env = gym.make("Pendulum-v1")
+    # Use deterministic actions for evaluation
+    # eval_callback = EvalCallback(eval_env, best_model_save_path="./logs/",
+    #                              log_path="./logs/", eval_freq=500,
+    #                              deterministic=True, render=False)
+
+    env_callback = EnvTerminalStatsLoggingCallback(env_train)
+
+    total_timesteps = 1_000_000
+    # agent = SAC(
+    #     policy='MultiInputPolicy',
+    #     env=env_train,
+    #     batch_size=128,
+    #     buffer_size=100_000,
+    #     verbose=1,
+    #     tensorboard_log="./tensorboard_log/"
+    # )
+    agent = SAC.load('trained_models/agent_sac', env=env_train)
+    try:
+        agent.learn(
+            total_timesteps=total_timesteps,
+            callback=env_callback,
+            progress_bar=True
+        )
+    except KeyboardInterrupt:
+        print("Обучение прервано вручную. Сохраняем модель...")
+    finally:
+        agent.save('trained_models/agent_sac')
+        print("Модель успешно сохранена.")
 
 
 if __name__ == '__main__':
-    total_timesteps = 500000
     train, _ = load_dataset()
-    env_train = build_env(train)
-    agent = PPO(policy='MlpPolicy', env=env_train)
-    trained_model = agent.learn(
-        total_timesteps=total_timesteps,
-        # callback=TensorboardCallback(),
-        progress_bar=True
-    )
-    trained_model.save('trained_models/agent_ppo')
+    env_train = build_env(train, verbose=1)
+    train_SAC(env_train)
