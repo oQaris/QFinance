@@ -33,6 +33,48 @@ def discrete_allocation_custom(weights: np.ndarray, prices: np.ndarray, total_su
     return num_shares * prices
 
 
+def minimize_transactions(price: np.ndarray, diff_tic_counts: np.ndarray, min_transaction: float, cash_balance: float):
+    """
+    Минимизирует количество транзакций при ребалансировке портфеля.
+
+    :param price: np.ndarray, цена каждой акции
+    :param diff_tic_counts: np.ndarray, изменение количества акций для каждой позиции (без кеша)
+    :param min_transaction: float, минимальная сумма денег для проведения одной транзакции
+    :param cash_balance: float, доступная сумма денег вне позиций
+    :return: np.ndarray, скорректированные diff_tic_counts
+    """
+    # Вычисляем стоимость каждой транзакции
+    transaction_values = diff_tic_counts * price
+    cash_balance += transaction_values.sum()
+    # Сортируем транзакции по абсолютной стоимости в порядке убывания
+    sorted_indices = np.argsort(-np.abs(transaction_values))
+    # Итоговая корректировка портфеля
+    adjusted_transactions = np.zeros_like(diff_tic_counts)
+
+    # Перебираем транзакции начиная с самой большой
+    for idx in sorted_indices:
+        txn_value = transaction_values[idx]
+        # Если транзакция переходит пороговое значение, то выполняем её
+        if np.abs(txn_value) >= min_transaction:
+            adjusted_transactions[idx] = diff_tic_counts[idx]
+            cash_balance -= txn_value
+
+    if cash_balance < 0:
+        for idx in sorted_indices:
+            txn_value = transaction_values[idx]
+            # Выбираем наибольшие невыполненные транзакции на продажу, чтобы восполнить баланс
+            if txn_value < 0 and adjusted_transactions[idx] == 0:
+                adjusted_transactions[idx] = diff_tic_counts[idx]
+                cash_balance -= txn_value
+                if cash_balance >= 0:
+                    break
+
+    if cash_balance < 0:
+        raise ValueError('Inconsistency in the number of tickers and prices.')
+
+    return adjusted_transactions
+
+
 def discrete_allocation(weights, multipliers, total):
     """
      Перераспределяет сумму total по ячейкам массива так,

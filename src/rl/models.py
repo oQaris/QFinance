@@ -8,7 +8,7 @@ from torch.optim import AdamW
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from .env import PortfolioOptimizationEnv
+from .envs.continuous_env import PortfolioOptimizationEnv
 from .nets_zoo import EI3
 from .utils import PVM
 from .utils import RLDataset
