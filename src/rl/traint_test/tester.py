@@ -6,11 +6,11 @@ import pandas as pd
 import torch
 
 from src.rl.algs.mvo import modern_portfolio_theory, top_stocks
-from src.rl.env import PortfolioOptimizationEnv
+from src.rl.envs.continuous_env import PortfolioOptimizationEnv
 from src.rl.loaders import get_start_end_dates
 from src.rl.models import PolicyGradient
 from src.rl.nets_zoo import EI3
-from src.rl.trainer import load_dataset, build_env, time_window
+from src.rl.traint_test.trainer import load_dataset, build_env, time_window
 
 
 def validation(predict_fn: Callable[[pd.DataFrame], np.ndarray], env: PortfolioOptimizationEnv):

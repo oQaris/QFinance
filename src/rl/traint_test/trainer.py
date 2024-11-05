@@ -1,3 +1,4 @@
+import math
 from typing import Callable
 
 import pandas as pd
@@ -7,7 +8,8 @@ from stable_baselines3 import PPO, SAC
 
 from src.rl.architectures.rnn import RNNPolicyNetwork
 from src.rl.callbacks import EnvTerminalStatsLoggingCallback
-from src.rl.env import PortfolioOptimizationEnv
+from src.rl.envs.continuous_env import PortfolioOptimizationEnv
+from src.rl.envs.discrete_env import StockTradingEnv
 from src.rl.loaders import split
 from src.rl.models import PolicyGradient
 from src.rl.policy import CustomActorCriticPolicy
@@ -37,12 +39,66 @@ def build_env(dataset: DataFrame, verbose=0):
         'window_features': window_features,
         'time_features': time_features,
         'indicators_features': indicators,
-        'normalize_df': None,  # or 'by_fist_time_window_value',
         'verbose': verbose
     }
+    dataset = dataset[dataset['tic'].isin(
+        ['AFLT', 'GMKN', 'MOEX', 'TCSG', 'MAGN', 'LKOH', 'NLMK', 'OZON', 'POLY', 'SBER', 'VKCO', 'YDEX'])].copy()
     env = PortfolioOptimizationEnv(dataset, **env_kwargs)
     # check_env(env)
     return env
+
+
+def build_discrete_env(dataset: DataFrame, verbose=0):
+    # todo создавать автоматически
+    ind_list = [
+        'macd',
+        'macdh',
+        'rsi_14',
+        'atr_14',
+        'adx',
+        'cci_14',
+        'stochrsi',
+        'wr_14',
+        'pdi',
+        'ndi',
+        'trix',
+        'dma',
+        'cmo',
+        'close_14_roc',
+        'return_lag_1',
+        'return_lag_7',
+        'return_lag_29',
+        'P/FCF',
+        'P/E',
+        'P/B',
+        'P/S',
+        'P/CF',
+        'EV/S',
+        'EV/EBITDA',
+        'EV/EBIT',
+        'Коэффициент долга',
+        'D/E',
+        'CAPEX/Выручка',
+        'NetDebt/EBITDA',
+        'Долг/EBITDA',
+        'ROE',
+        'ROA',
+        'Return on Sales',
+        'ROIC',
+        'ROCE',
+        'Net Margin',
+        'Операционная маржа',
+        'EBITDA рентабельность',
+        'Тек. ливкидность'
+    ]
+    env_kwargs = {
+        "hmax": 100,
+        "initial_amount": 1000000,
+        'comission_fee_pct': 0.003,
+        "tech_indicator_list": ind_list,
+        "reward_scaling": 1e-4
+    }
+    return StockTradingEnv(df=dataset, **env_kwargs)
 
 
 def linear_schedule(initial_value: float) -> Callable[[float], float]:
@@ -61,6 +117,17 @@ def linear_schedule(initial_value: float) -> Callable[[float], float]:
         return progress_remaining * initial_value
 
     return schedule
+
+
+def cosine_annealing_schedule(progress_remaining):
+    """
+    Cosine Annealing Schedule для learning_rate.
+    progress_remaining — значение от 1 (начало) до 0 (конец обучения).
+    """
+    initial_rate = 5e-4  # Начальная скорость обучения
+    final_rate = 1e-4  # Минимальная скорость обучения
+    cos_inner = (1 + math.cos(math.pi * (1 - progress_remaining))) / 2
+    return final_rate + (initial_rate - final_rate) * cos_inner
 
 
 def train_PG(env_train):
@@ -109,16 +176,15 @@ def train_SAC(env_train):
 
     env_callback = EnvTerminalStatsLoggingCallback(env_train)
 
-    total_timesteps = 1_000_000
-    # agent = SAC(
-    #     policy='MultiInputPolicy',
-    #     env=env_train,
-    #     batch_size=128,
-    #     buffer_size=100_000,
-    #     verbose=1,
-    #     tensorboard_log="./tensorboard_log/"
-    # )
-    agent = SAC.load('trained_models/agent_sac', env=env_train)
+    total_timesteps = 500_000
+    agent = SAC(
+        policy='MultiInputPolicy',
+        env=env_train,
+        buffer_size=500000,
+        verbose=1,
+        tensorboard_log="./tensorboard_log/"
+    )
+    # agent = SAC.load('trained_models/agent_sac', env=env_train, learning_rate=3e-4)
     try:
         agent.learn(
             total_timesteps=total_timesteps,

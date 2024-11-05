@@ -4,7 +4,7 @@ from pypfopt import expected_returns, BlackLittermanModel
 from pypfopt import risk_models
 from pypfopt.efficient_frontier import EfficientFrontier
 
-from src.rl.trainer import load_dataset
+from src.rl.traint_test.trainer import load_dataset
 
 
 def modern_portfolio_theory(df):
