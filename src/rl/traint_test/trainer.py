@@ -5,6 +5,7 @@ import pandas as pd
 import torch
 from pandas import DataFrame
 from stable_baselines3 import PPO, SAC
+from stable_baselines3.common.vec_env import SubprocVecEnv
 
 from src.rl.architectures.rnn import RNNPolicyNetwork
 from src.rl.callbacks import EnvTerminalStatsLoggingCallback
@@ -22,7 +23,7 @@ def load_dataset():
     return split(dataset, train_ratio=0.8, stratification=time_window)
 
 
-def build_env(dataset: DataFrame, verbose=0):
+def build_env(dataset: DataFrame, verbose=1):
     allux_cols = ['date', 'tic', 'lot', 'price']
     window_features = ['open',
                        'close',
@@ -92,11 +93,10 @@ def build_discrete_env(dataset: DataFrame, verbose=0):
         'Тек. ливкидность'
     ]
     env_kwargs = {
-        "hmax": 100,
-        "initial_amount": 1000000,
+        'initial_amount': 1000000,
         'comission_fee_pct': 0.003,
-        "tech_indicator_list": ind_list,
-        "reward_scaling": 1e-4
+        'tech_indicator_list': ind_list,
+        'verbose': verbose
     }
     return StockTradingEnv(df=dataset, **env_kwargs)
 
@@ -137,11 +137,11 @@ def train_PG(env_train):
     try:
         agent.train(episodes=500)
     except KeyboardInterrupt:
-        print("Обучение прервано вручную. Сохраняем модель...")
+        print('Обучение прервано вручную. Сохраняем модель...')
     finally:
         model_path = 'trained_models/policy_EI3.pt'
         torch.save(agent.train_policy.state_dict(), model_path)
-        print("Модель успешно сохранена.")
+        print('Модель успешно сохранена.')
 
 
 def train_PPO(env_train):
@@ -152,7 +152,7 @@ def train_PPO(env_train):
         # learning_rate=linear_schedule(0.001),
         verbose=1,
         policy_kwargs=dict(policy_network_class=RNNPolicyNetwork),
-        tensorboard_log="./tensorboard_log/"
+        tensorboard_log='./tensorboard_log/'
     )
     try:
         agent.learn(
@@ -160,29 +160,33 @@ def train_PPO(env_train):
             progress_bar=True
         )
     except KeyboardInterrupt:
-        print("Обучение прервано вручную. Сохраняем модель...")
+        print('Обучение прервано вручную. Сохраняем модель...')
     finally:
         agent.save('trained_models/agent_ppo')
-        print("Модель успешно сохранена.")
+        print('Модель успешно сохранена.')
 
 
-def train_SAC(env_train):
+def train_SAC(dataset):
     # Separate evaluation env
-    # eval_env = gym.make("Pendulum-v1")
+    # eval_env = gym.make('Pendulum-v1')
     # Use deterministic actions for evaluation
-    # eval_callback = EvalCallback(eval_env, best_model_save_path="./logs/",
-    #                              log_path="./logs/", eval_freq=500,
+    # eval_callback = EvalCallback(eval_env, best_model_save_path='./logs/',
+    #                              log_path='./logs/', eval_freq=500,
     #                              deterministic=True, render=False)
 
-    env_callback = EnvTerminalStatsLoggingCallback(env_train)
+    num_envs = 8
+    env_train = SubprocVecEnv([lambda: build_env(dataset) for _ in range(num_envs)])
+
+    env_callback = EnvTerminalStatsLoggingCallback()
 
     total_timesteps = 500_000
     agent = SAC(
+        # policy='MultiInputPolicy',
         policy='MultiInputPolicy',
         env=env_train,
-        buffer_size=500000,
+        buffer_size=500_000,
         verbose=1,
-        tensorboard_log="./tensorboard_log/"
+        tensorboard_log='./tensorboard_log/'
     )
     # agent = SAC.load('trained_models/agent_sac', env=env_train, learning_rate=3e-4)
     try:
@@ -192,13 +196,14 @@ def train_SAC(env_train):
             progress_bar=True
         )
     except KeyboardInterrupt:
-        print("Обучение прервано вручную. Сохраняем модель...")
+        print('Обучение прервано вручную. Сохраняем модель...')
     finally:
         agent.save('trained_models/agent_sac')
-        print("Модель успешно сохранена.")
+        print('Модель успешно сохранена.')
 
 
 if __name__ == '__main__':
     train, _ = load_dataset()
-    env_train = build_env(train, verbose=1)
-    train_SAC(env_train)
+    # env_train = build_env(train, verbose=1)
+    # env_train = build_discrete_env(train, verbose=1)
+    train_SAC(train)
