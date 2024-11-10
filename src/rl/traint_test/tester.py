@@ -42,7 +42,7 @@ def backtest():
     # trained_model = PPO.load('trained_models/agent_ppo')
     # model_predict_fun = lambda obs: trained_model.predict(obs, deterministic=True)[0]
 
-    policy = EI3(time_window=time_window, initial_features=len(env_trade._window_features))
+    policy = EI3(time_window=time_window, initial_features=len(env_trade.window_features))
     policy.load_state_dict(torch.load('trained_models/policy_EI3.pt'))
     PolicyGradient(env_trade).test(env_trade, online_training_period=999990, policy=policy)
 

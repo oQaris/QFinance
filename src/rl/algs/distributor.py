@@ -70,7 +70,7 @@ def minimize_transactions(price: np.ndarray, diff_tic_counts: np.ndarray, min_tr
                     break
 
     if cash_balance < 0:
-        raise ValueError('Inconsistency in the number of tickers and prices.')
+        raise ValueError(f'Inconsistency in the number of tickers and prices. cash_balance = {cash_balance}')
 
     return adjusted_transactions
 

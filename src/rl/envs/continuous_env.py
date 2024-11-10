@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import warnings
 
 import gymnasium as gym
 import numpy as np
@@ -43,56 +44,85 @@ class PortfolioOptimizationEnv(gym.Env):
             tic_column='tic',
             lot_column='lot',
             time_window=64,
-            reward_scaling=10,
-            comission_fee_pct=0.003,
             reward_type='mean',
+            reward_scaling=10,
+            fee_ratio=0.003,
+            transaction_threshold_ratio=0.005,
             verbose=0,
     ):
+        """
+        Среда портфельной аллокации, в которой наблюдение - Dict,
+        действие - Box (текущее распределение стоимости портфеля).
+
+        :param df: Датафрейм с историческими данными для среды
+        :param initial_amount: Начальная стоимость портфеля (значение кеша)
+        :param window_features: Столбцы временного ряда (изменения цен)
+        :param indicators_features: Столбцы индикаторов активов
+        :param time_features: Столбцы общих данных по дате (настроение рынка, турбулентность, данные о времени)
+        :param valuation_column: Столбец реальной цены для вычисления наград
+        :param time_column: Столбец метки времени
+        :param tic_column: Столбец названия тикера
+        :param lot_column: Столбец лотности актива
+        :param time_window: Размер временного окна 'time_features' для добавления в словарь состояни
+        :param reward_type: Тип вычисления награды агента.
+            'mean' — разница со средним движением рынка,
+            'log' — логарифм изменения стоимости портфеля,
+            любое другое значение для относительного изменения стоимости портфеля
+        :param reward_scaling: Множитель награды агента
+        :param fee_ratio: Доля комисси за сделки (от стоимости транзакции)
+        :param transaction_threshold_ratio: Порог отсечения транзакций (в долях от стоимости портфеля)
+        :param verbose: Уровень детализации оповещений.
+            0 — отсутствие вывода,
+            1 — информационные сообщения,
+            2 — отладочные сообщения
+        """
         self.commission_paid = 0
         self.num_of_transactions = 0
-        self._time_window = time_window
+        self.time_window = time_window
         self._time_index = time_window - 1
 
-        self._valuation_column = valuation_column
-        self._time_column = time_column
-        self._tic_column = tic_column
-        self._lot_column = lot_column
+        self.valuation_column = valuation_column
+        self.time_column = time_column
+        self.tic_column = tic_column
+        self.lot_column = lot_column
 
         self._df = df
-        self._initial_amount = initial_amount
-        self._reward_scaling = reward_scaling
-        self._reward_type = reward_type
-        self._comission_fee_pct = comission_fee_pct
-        self._window_features = window_features
-        self._indicators_features = indicators_features
-        self._time_features = time_features
+        self.initial_amount = initial_amount
+        self.reward_scaling = reward_scaling
+        self.reward_type = reward_type
+        self.fee_ratio = fee_ratio
+        self.transaction_threshold_ratio = transaction_threshold_ratio
 
-        self._verbose = verbose
+        self.window_features = window_features
+        self.indicators_features = indicators_features
+        self.time_features = time_features
+
+        self.verbose = verbose
         # initialize price variation
         self._df_price_variation = None
         # preprocess data
         self._preprocess_data()
         # dims and spaces
-        self._tic_list = self._df[self._tic_column].unique()
+        self._tic_list = self._df[self.tic_column].unique()
         self.portfolio_size = len(self._tic_list)
         # sort datetimes and define episode length
         self._sorted_times = sorted(set(self._df[time_column]))
         self.episode_length = len(self._sorted_times) - time_window + 1
 
-        self._portfolio_value = self._initial_amount
+        self._portfolio_value = self.initial_amount
 
         # Необходимо для OpenAI Gym
         self.action_space = spaces.Box(low=0, high=1, shape=(self.portfolio_size + 1,), dtype=np.float32)
         self.observation_space = spaces.Dict({
             'price_data': spaces.Box(
-                low=-np.inf, high=np.inf, shape=(len(self._window_features), self.portfolio_size, self._time_window),
+                low=-np.inf, high=np.inf, shape=(len(self.window_features), self.portfolio_size, self.time_window),
                 dtype=np.float32
             ),
             'indicators': spaces.Box(
-                low=-np.inf, high=np.inf, shape=(self.portfolio_size, len(self._indicators_features)), dtype=np.float32
+                low=-np.inf, high=np.inf, shape=(self.portfolio_size, len(self.indicators_features)), dtype=np.float32
             ),
             'common_data': spaces.Box(
-                low=-np.inf, high=np.inf, shape=(len(self._time_features),), dtype=np.float32
+                low=-np.inf, high=np.inf, shape=(len(self.time_features),), dtype=np.float32
             ),
             'portfolio_dist': spaces.Box(
                 low=0, high=1, shape=(self.portfolio_size + 1,), dtype=np.float32
@@ -112,12 +142,14 @@ class PortfolioOptimizationEnv(gym.Env):
         })
         metrics_df.set_index('date', inplace=True)
 
-        profit = self._portfolio_value / self._initial_amount
-        max_draw_down = qs.stats.max_drawdown(metrics_df['portfolio_values'])
+        profit = self._portfolio_value / self.initial_amount
+        # Берёт с отрицанием, чтобы просадка была положительной
+        max_draw_down = -qs.stats.max_drawdown(metrics_df['portfolio_values'])
         sharpe_ratio = qs.stats.sharpe(metrics_df['returns'])
-        fee_ratio = self.commission_paid / self._initial_amount
+        fee_ratio = self.commission_paid / self.initial_amount
 
-        positions = np.stack(metrics_df['tic_counts'].values[1:])  # Первый элемент не учитываем, т.к. там нули
+        # Первый элемент не учитываем, т.к. там нули
+        positions = np.stack(metrics_df['tic_counts'].values[1:])
         mean_position_tic = np.count_nonzero(positions, axis=1).mean()
         mean_transactions = self.num_of_transactions / metrics_df.shape[0]
 
@@ -137,9 +169,9 @@ class PortfolioOptimizationEnv(gym.Env):
         if terminal:
             terminal_stats = self.get_terminal_stats()
             info["terminal_stats"] = terminal_stats
-            if self._verbose >= 1:
+            if self.verbose >= 1:
                 print('\n=================================')
-                print(f'Initial portfolio value:{self._initial_amount}')
+                print(f'Initial portfolio value:{self.initial_amount}')
                 print(f'Final portfolio value: {self._portfolio_value}')
                 for key, value in terminal_stats.items():
                     print(f'{key}: {value}')
@@ -149,18 +181,19 @@ class PortfolioOptimizationEnv(gym.Env):
         # actions = np.array(actions, dtype=np.float32)
 
         # if necessary, normalize weights
-        if math.isclose(np.sum(actions), 1, abs_tol=1e-6) and np.min(actions) >= 0:
+        if np.sum(actions) == 1 and np.min(actions) >= 0:
             weights = actions
         else:
             # print('_custom_softmax')
             # weights = _custom_softmax(actions)
             weights = _softmax(actions)
+            # weights = actions / actions.sum()
 
         # save initial portfolio weights for this time step
         self._actions_memory.append(weights)
 
         # get last step final weights and portfolio_value
-        current_portfolio, fee = self._rebalance_portfolio(weights)  # weights*self._portfolio_value, 1000
+        current_portfolio, fee = self._rebalance_portfolio(weights)  # portfolio = weights * self._portfolio_value
         self.commission_paid += fee
         self._portfolio_value = current_portfolio.sum()
 
@@ -194,14 +227,14 @@ class PortfolioOptimizationEnv(gym.Env):
         self._portfolio_return_memory.append(portfolio_return)
 
         # define reward
-        if self._reward_type == 'mean':
+        if self.reward_type == 'mean':
             reward = portfolio_return - mean_return
-        elif self._reward_type == 'log':
+        elif self.reward_type == 'log':
             reward = math.log(rate_of_return)
         else:
             reward = portfolio_return
 
-        return state, reward * self._reward_scaling, terminal, False, info
+        return state, reward * self.reward_scaling, terminal, False, info
 
     def eval_trades(self, rest_cash):
         tic_counts = self._tic_counts_memory[-1]
@@ -212,12 +245,12 @@ class PortfolioOptimizationEnv(gym.Env):
         for idx in transactions:
             elem = diff_tic_counts[idx]
             self.num_of_transactions += 1
-            if self._verbose > 1:
+            if self.verbose > 1:
                 if elem > 0:
                     print(f'{date}: куплено {elem} акций {tics[idx]}')
                 elif elem < 0:
                     print(f'{date}: продано {-elem} акций {tics[idx]}')
-        if self._verbose > 1 and len(transactions) > 0:
+        if self.verbose > 1 and len(transactions) > 0:
             print(f'Открыто {np.count_nonzero(tic_counts)} позиций:')
             for idx in np.nonzero(tic_counts)[0]:
                 elem = tic_counts[idx]
@@ -234,16 +267,17 @@ class PortfolioOptimizationEnv(gym.Env):
         :return: Новая распределённая стоимость портфеля (на основе self._portfolio_value) + уже учтённая в нём комиссия
         """
         wsum = weights.sum()
-        if wsum > 1:
-            # print('bad weights sum', weights.sum())
+        if abs(wsum - 1) > 1e-5:
+            warnings.warn(f'Bad weights sum: {weights.sum()}')
             weights /= wsum
+
         data_slice = self._df[
-            (self._df[self._time_column] == self._sorted_times[self._time_index])
+            (self._df[self.time_column] == self._sorted_times[self._time_index])
         ].set_index('tic')
 
         # В начале - денежные средства
-        price = np.array([1.0] + data_slice[self._valuation_column].tolist())
-        lot_size = np.array([1.0] + data_slice[self._lot_column].tolist())  # Рубли можем дробить на копейки
+        price = np.array([1.0] + data_slice[self.valuation_column].tolist())
+        lot_size = np.array([1.0] + data_slice[self.lot_column].tolist())  # Рубли можем дробить на копейки
         multipliers = price * lot_size
 
         # Смысл цикла в том, что сперва пытаемся распределить портфель вообще без резервирования денег на комиссию.
@@ -257,7 +291,7 @@ class PortfolioOptimizationEnv(gym.Env):
         while True:
             counter += 1
             if counter > 2:
-                print(f'Warning: too much rebalancing ({counter}).')
+                warnings.warn(f'Too much rebalancing: {counter}')
             real_values, fee, tic_counts = self._allocate_with_fee(price, weights, multipliers, fee)
             rest_cash = real_values[0] - fee
             if rest_cash >= 0:
@@ -282,8 +316,8 @@ class PortfolioOptimizationEnv(gym.Env):
         tic_counts = np.array([int(np.round(x)) for x in (real_values[1:] / tic_price)])
         diff_tic_counts = tic_counts - self._tic_counts_memory[-1]
 
-        # Откатываем незначительные транзакции (менее 1% портфеля) для минимизации комиссии и стабилизации агента
-        threshold = real_values.sum() * 0.01
+        # Откатываем незначительные транзакции (менее 0.5% портфеля) для минимизации комиссии и стабилизации агента
+        threshold = real_values.sum() * 0.005
         new_diff_tic_counts = minimize_transactions(tic_price, diff_tic_counts, threshold, real_values[0])
         new_tic_counts = self._tic_counts_memory[-1] + new_diff_tic_counts
         new_real_values = tic_price * new_tic_counts
@@ -293,7 +327,7 @@ class PortfolioOptimizationEnv(gym.Env):
 
         # Расчёт комиссии за сделки
         turnover = (np.abs(new_diff_tic_counts) * tic_price).sum()
-        fee = turnover * self._comission_fee_pct
+        fee = turnover * self.fee_ratio
 
         if abs(value_before - new_real_values.sum()) > 1e-5:
             raise ValueError(
@@ -304,46 +338,46 @@ class PortfolioOptimizationEnv(gym.Env):
         self.commission_paid = 0
         self.num_of_transactions = 0
         # time_index must start a little bit in the future to implement lookback
-        self._time_index = self._time_window - 1
+        self._time_index = self.time_window - 1
         self._reset_memory()
 
         state = self._get_state_and_info_from_time_index(self._time_index)
-        self._portfolio_value = self._initial_amount
+        self._portfolio_value = self.initial_amount
 
         return state, {}
 
     def _get_state_and_info_from_time_index(self, time_index):
         # Определение временного диапазона
         end_time = self._sorted_times[time_index]
-        start_time = self._sorted_times[time_index - (self._time_window - 1)]
+        start_time = self._sorted_times[time_index - (self.time_window - 1)]
 
         # Выбор данных для текущего временного шага
         self._data = self._df[
-            (self._df[self._time_column] >= start_time) &
-            (self._df[self._time_column] <= end_time)]
+            (self._df[self.time_column] >= start_time) &
+            (self._df[self.time_column] <= end_time)]
 
         # Определение вариации цены для текущего временного шага
         self._price_variation = self._df_price_variation[
-            self._df_price_variation[self._time_column] == end_time
-            ][self._valuation_column].to_numpy()
+            self._df_price_variation[self.time_column] == end_time
+            ][self.valuation_column].to_numpy()
         self._price_variation = np.insert(self._price_variation, 0, 1)  # Добавляем кеш
 
         # Получение данных по тикерам
-        all_tic_data = self._data.set_index(self._tic_column).loc[self._tic_list, self._window_features].to_numpy()
-        all_tic_data = all_tic_data.reshape(len(self._tic_list), len(self._window_features), self._time_window)
+        all_tic_data = self._data.set_index(self.tic_column).loc[self._tic_list, self.window_features].to_numpy()
+        all_tic_data = all_tic_data.reshape(len(self._tic_list), len(self.window_features), self.time_window)
 
         # Формирование price_data (транспонирование для приведения к нужному формату)
         # (features, tics, timesteps)
         price_data = all_tic_data.transpose(1, 0, 2)
 
         # Извлечение индикаторов для последней даты в окне (end_time) по каждому тикеру
-        last_time_data = self._data[self._data[self._time_column] == end_time]
-        indicators = last_time_data.set_index(self._tic_column).loc[
-            self._tic_list, self._indicators_features].to_numpy()
+        last_time_data = self._data[self._data[self.time_column] == end_time]
+        indicators = last_time_data.set_index(self.tic_column).loc[
+            self._tic_list, self.indicators_features].to_numpy()
 
         # Извлечение общих данных по рынку
         # Общие данные предполагаются одинаковыми для всех тикеров
-        common_data = last_time_data[self._time_features].iloc[0].to_numpy()
+        common_data = last_time_data[self.time_features].iloc[0].to_numpy()
 
         # Формирование словаря состояния
         state = {
@@ -356,22 +390,22 @@ class PortfolioOptimizationEnv(gym.Env):
 
     def _preprocess_data(self):
         # order time dataframe by tic and time
-        self._df = self._df.sort_values(by=[self._tic_column, self._time_column])
+        self._df = self._df.sort_values(by=[self.tic_column, self.time_column])
         # defining price variation after ordering dataframe
         self._df_price_variation = self._temporal_variation_df()[
-            [self._tic_column, self._time_column, self._valuation_column]
+            [self.tic_column, self.time_column, self.valuation_column]
         ]
         self._mean_temporal_variation = (self._df_price_variation
-                                         .groupby(self._time_column)[self._valuation_column]
+                                         .groupby(self.time_column)[self.valuation_column]
                                          .mean())
         # transform str to datetime
-        self._df[self._time_column] = pd.to_datetime(self._df[self._time_column])
-        self._df_price_variation[self._time_column] = pd.to_datetime(self._df_price_variation[self._time_column])
+        self._df[self.time_column] = pd.to_datetime(self._df[self.time_column])
+        self._df_price_variation[self.time_column] = pd.to_datetime(self._df_price_variation[self.time_column])
         self._mean_temporal_variation.index = pd.to_datetime(self._mean_temporal_variation.index)
 
     def _reset_memory(self):
         # memorize portfolio value each step
-        self._asset_memory = [self._initial_amount]
+        self._asset_memory = [self.initial_amount]
         # memorize portfolio return and reward each step
         self._portfolio_return_memory = [0]
         # initial action: all money is allocated in cash
@@ -383,7 +417,7 @@ class PortfolioOptimizationEnv(gym.Env):
             np.array([1] + [0] * self.portfolio_size, dtype=np.float32)
         ]
         self._portfolio_memory = [
-            np.array([self._initial_amount] + [0] * self.portfolio_size, dtype=np.float32)
+            np.array([self.initial_amount] + [0] * self.portfolio_size, dtype=np.float32)
         ]
         self._tic_counts_memory = [
             np.array([0] * self.portfolio_size, dtype=np.uint32)
@@ -393,15 +427,11 @@ class PortfolioOptimizationEnv(gym.Env):
         self._date_memory = [date_time]
 
     def _temporal_variation_df(self, periods=1):
-        """Calculates the temporal variation dataframe. For each feature, this
-        dataframe contains the rate of the current feature's value and the last
-        feature's value given a period. It's used to normalize the dataframe.
+        """
+        Вычисляет кадры данных временных вариаций для числовых столбцов.
 
-        Args:
-            periods: Periods (in time indexes) to calculate temporal variation.
-
-        Returns:
-            Temporal variation dataframe.
+        :param periods: Количество периодов для расчета временных изменений.
+        :return: Кадры данных временных вариаций.
         """
         df_temporal_variation = self._df.copy()
         numeric_cols = df_temporal_variation.select_dtypes(include=[np.number]).columns
@@ -409,7 +439,7 @@ class PortfolioOptimizationEnv(gym.Env):
 
         for column in numeric_cols:
             shifted_data[f'prev_{column}'] = (
-                df_temporal_variation.groupby(self._tic_column)[column]
+                df_temporal_variation.groupby(self.tic_column)[column]
                 .shift(periods=periods)
             )
 

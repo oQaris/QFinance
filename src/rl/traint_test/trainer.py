@@ -7,15 +7,13 @@ from pandas import DataFrame
 from stable_baselines3 import PPO, SAC
 from stable_baselines3.common.vec_env import SubprocVecEnv
 
-from src.rl.architectures.rnn import RNNPolicyNetwork
 from src.rl.callbacks import EnvTerminalStatsLoggingCallback
 from src.rl.envs.continuous_env import PortfolioOptimizationEnv
 from src.rl.envs.discrete_env import StockTradingEnv
 from src.rl.loaders import split
 from src.rl.models import PolicyGradient
-from src.rl.policy import CustomActorCriticPolicy
 
-time_window = 16
+time_window = 1
 
 
 def load_dataset():
@@ -35,11 +33,12 @@ def build_env(dataset: DataFrame, verbose=1):
                   f not in allux_cols and f not in window_features and f not in time_features][1:]
     env_kwargs = {
         'initial_amount': 1000000,
-        'comission_fee_pct': 0.003,
+        'fee_ratio': 0.003,
         'time_window': time_window,
         'window_features': window_features,
         'time_features': time_features,
         'indicators_features': indicators,
+        'reward_type': 'log',
         'verbose': verbose
     }
     dataset = dataset[dataset['tic'].isin(
@@ -133,7 +132,7 @@ def cosine_annealing_schedule(progress_remaining):
 def train_PG(env_train):
     agent = PolicyGradient(env_train,
                            policy_kwargs=dict(time_window=time_window,
-                                              initial_features=len(env_train._window_features)))
+                                              initial_features=len(env_train.window_features)))
     try:
         agent.train(episodes=500)
     except KeyboardInterrupt:
@@ -144,29 +143,7 @@ def train_PG(env_train):
         print('Модель успешно сохранена.')
 
 
-def train_PPO(env_train):
-    total_timesteps = 1_000_000
-    agent = PPO(
-        policy=CustomActorCriticPolicy,
-        env=env_train,
-        # learning_rate=linear_schedule(0.001),
-        verbose=1,
-        policy_kwargs=dict(policy_network_class=RNNPolicyNetwork),
-        tensorboard_log='./tensorboard_log/'
-    )
-    try:
-        agent.learn(
-            total_timesteps=total_timesteps,
-            progress_bar=True
-        )
-    except KeyboardInterrupt:
-        print('Обучение прервано вручную. Сохраняем модель...')
-    finally:
-        agent.save('trained_models/agent_ppo')
-        print('Модель успешно сохранена.')
-
-
-def train_SAC(dataset):
+def train_agent(dataset):
     # Separate evaluation env
     # eval_env = gym.make('Pendulum-v1')
     # Use deterministic actions for evaluation
@@ -179,21 +156,22 @@ def train_SAC(dataset):
 
     env_callback = EnvTerminalStatsLoggingCallback()
 
-    total_timesteps = 500_000
-    agent = SAC(
-        # policy='MultiInputPolicy',
+    total_timesteps = 5_000_000
+    agent = PPO(
         policy='MultiInputPolicy',
         env=env_train,
-        buffer_size=500_000,
+        # buffer_size=500_000,
         verbose=1,
-        tensorboard_log='./tensorboard_log/'
+        tensorboard_log='./tensorboard_log/',
+        seed=42
     )
     # agent = SAC.load('trained_models/agent_sac', env=env_train, learning_rate=3e-4)
     try:
         agent.learn(
             total_timesteps=total_timesteps,
             callback=env_callback,
-            progress_bar=True
+            progress_bar=True,
+            tb_log_name='ppo-win1'
         )
     except KeyboardInterrupt:
         print('Обучение прервано вручную. Сохраняем модель...')
@@ -206,4 +184,4 @@ if __name__ == '__main__':
     train, _ = load_dataset()
     # env_train = build_env(train, verbose=1)
     # env_train = build_discrete_env(train, verbose=1)
-    train_SAC(train)
+    train_agent(train)
