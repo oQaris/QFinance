@@ -48,7 +48,7 @@ def build_env(dataset: DataFrame, verbose=1):
     return env
 
 
-def build_discrete_env(dataset: DataFrame, verbose=0):
+def build_discrete_env(dataset: DataFrame, verbose=1):
     # todo создавать автоматически
     ind_list = [
         'macd',
@@ -151,14 +151,15 @@ def train_agent(dataset):
     #                              log_path='./logs/', eval_freq=500,
     #                              deterministic=True, render=False)
 
-    num_envs = 8
-    env_train = SubprocVecEnv([lambda: build_env(dataset) for _ in range(num_envs)])
+    exp_name = 'PPO_discrete'
+    num_envs = 16
+    env_train = SubprocVecEnv([lambda: build_discrete_env(dataset) for _ in range(num_envs)])
 
     env_callback = EnvTerminalStatsLoggingCallback()
 
     total_timesteps = 5_000_000
     agent = PPO(
-        policy='MultiInputPolicy',
+        policy='MlpPolicy',
         env=env_train,
         # buffer_size=500_000,
         verbose=1,
@@ -171,12 +172,12 @@ def train_agent(dataset):
             total_timesteps=total_timesteps,
             callback=env_callback,
             progress_bar=True,
-            tb_log_name='ppo-win1'
+            tb_log_name=exp_name
         )
     except KeyboardInterrupt:
         print('Обучение прервано вручную. Сохраняем модель...')
     finally:
-        agent.save('trained_models/agent_sac')
+        agent.save(f'trained_models/{exp_name}')
         print('Модель успешно сохранена.')
 
 
