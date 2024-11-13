@@ -209,7 +209,7 @@ class StockTradingEnv(gym.Env):
         reward = reward / self.initial_amount * 100
         self.state_memory.append(self.state)  # add current state in state_recorder for each step
 
-        return self.state, reward, terminal, False, {}
+        return self.state, reward, terminal, False, info
 
     def reset(
             self,
