@@ -154,12 +154,12 @@ class PortfolioOptimizationEnv(gym.Env):
         mean_transactions = self.num_of_transactions / metrics_df.shape[0]
 
         return {
-            "Profit": profit,
-            "Max DrawDown": max_draw_down,
-            "Sharpe ratio": sharpe_ratio,
-            "Fee ratio": fee_ratio,
-            "Mean position tic": mean_position_tic,
-            "Mean transactions": mean_transactions,
+            'profit': profit,
+            'max_draw_down': max_draw_down,
+            'sharpe_ratio': sharpe_ratio,
+            'fee_ratio': fee_ratio,
+            'mean_position_tic': mean_position_tic,
+            'mean_transactions': mean_transactions,
         }
 
     def step(self, actions):
@@ -168,7 +168,7 @@ class PortfolioOptimizationEnv(gym.Env):
 
         if terminal:
             terminal_stats = self.get_terminal_stats()
-            info["terminal_stats"] = terminal_stats
+            info['terminal_stats'] = terminal_stats
             if self.verbose >= 1:
                 print('\n=================================')
                 print(f'Initial portfolio value:{self.initial_amount}')

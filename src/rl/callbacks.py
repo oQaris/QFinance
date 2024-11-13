@@ -12,5 +12,5 @@ class EnvTerminalStatsLoggingCallback(BaseCallback):
             if done:
                 terminal_stats = infos[idx].get("terminal_stats", {})
                 for key, value in terminal_stats.items():
-                    self.logger.record(f"Environment/{key}", value)
+                    self.logger.record(f"env/{key}", value)
         return True
