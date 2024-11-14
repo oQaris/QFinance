@@ -4,16 +4,18 @@ from typing import Callable
 import pandas as pd
 import torch
 from pandas import DataFrame
-from stable_baselines3 import PPO, SAC
+from stable_baselines3 import SAC
 from stable_baselines3.common.vec_env import SubprocVecEnv
+from stable_baselines3.sac.policies import SACPolicy
 
 from src.rl.callbacks import EnvTerminalStatsLoggingCallback
 from src.rl.envs.continuous_env import PortfolioOptimizationEnv
 from src.rl.envs.discrete_env import StockTradingEnv
 from src.rl.loaders import split
 from src.rl.models import PolicyGradient
+from src.rl.sac_policy import RNNvsCNNFeaturesExtractor
 
-time_window = 1
+time_window = 64
 
 
 def load_dataset():
@@ -151,17 +153,18 @@ def train_agent(dataset):
     #                              log_path='./logs/', eval_freq=500,
     #                              deterministic=True, render=False)
 
-    exp_name = 'PPO_discrete'
+    exp_name = 'SAC_cnt-rn-cn-64'
     num_envs = 16
-    env_train = SubprocVecEnv([lambda: build_discrete_env(dataset) for _ in range(num_envs)])
+    env_train = SubprocVecEnv([lambda: build_env(dataset) for _ in range(num_envs)])
 
     env_callback = EnvTerminalStatsLoggingCallback()
 
     total_timesteps = 5_000_000
-    agent = PPO(
-        policy='MlpPolicy',
+    agent = SAC(
+        policy=SACPolicy,
+        policy_kwargs=dict(features_extractor_class=RNNvsCNNFeaturesExtractor),
         env=env_train,
-        # buffer_size=500_000,
+        buffer_size=500_000,
         verbose=1,
         tensorboard_log='./tensorboard_log/',
         seed=42
