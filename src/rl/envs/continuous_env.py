@@ -44,10 +44,10 @@ class PortfolioOptimizationEnv(gym.Env):
             tic_column='tic',
             lot_column='lot',
             time_window=64,
-            reward_type='mean',
+            reward_type='excess_log',
             reward_scaling=10,
             fee_ratio=0.003,
-            transaction_threshold_ratio=0.005,
+            transaction_threshold_ratio=0.01,
             verbose=0,
     ):
         """
@@ -63,11 +63,13 @@ class PortfolioOptimizationEnv(gym.Env):
         :param time_column: Столбец метки времени
         :param tic_column: Столбец названия тикера
         :param lot_column: Столбец лотности актива
-        :param time_window: Размер временного окна 'time_features' для добавления в словарь состояни
+        :param time_window: Размер временного окна 'time_features' для добавления в словарь состояния
         :param reward_type: Тип вычисления награды агента.
-            'mean' — разница со средним движением рынка,
-            'log' — логарифм изменения стоимости портфеля,
-            любое другое значение для относительного изменения стоимости портфеля
+            'return_absolute' — процентная доходность,
+            'return_log' — логарифмическая доходность,
+            'excess_absolute' — разница со средним движением рынка,
+            'excess_relative' — отношение со средним движением рынка,
+            'excess_log' — логарифм от excess_relative.
         :param reward_scaling: Множитель награды агента
         :param fee_ratio: Доля комисси за сделки (от стоимости транзакции)
         :param transaction_threshold_ratio: Порог отсечения транзакций (в долях от стоимости портфеля)
@@ -142,21 +144,30 @@ class PortfolioOptimizationEnv(gym.Env):
         })
         metrics_df.set_index('date', inplace=True)
 
-        profit = self._portfolio_value / self.initial_amount
+        # Считаем среднее число транзакций без учёта первых покупок
+        final_num_transactions = self.num_of_transactions - np.count_nonzero(self._tic_counts_memory[0])
+        mean_transactions = final_num_transactions / (len(self._tic_counts_memory) - 1)
+
+        # Продаём всё, перед тем как считать профит
+        sell_all_weights = np.array([1] + [0] * self.portfolio_size)
+        final_portfolio_value = self._rebalance_portfolio(sell_all_weights)[0].sum()
+        profit = final_portfolio_value / self.initial_amount
+
         # Берёт с отрицанием, чтобы просадка была положительной
         max_draw_down = -qs.stats.max_drawdown(metrics_df['portfolio_values'])
         sharpe_ratio = qs.stats.sharpe(metrics_df['returns'])
+        sortino_ratio = qs.stats.sortino(metrics_df['returns'])
         fee_ratio = self.commission_paid / self.initial_amount
 
         # Первый элемент не учитываем, т.к. там нули
         positions = np.stack(metrics_df['tic_counts'].values[1:])
         mean_position_tic = np.count_nonzero(positions, axis=1).mean()
-        mean_transactions = self.num_of_transactions / metrics_df.shape[0]
 
         return {
             'profit': profit,
             'max_draw_down': max_draw_down,
             'sharpe_ratio': sharpe_ratio,
+            'sortino_ratio': sortino_ratio,
             'fee_ratio': fee_ratio,
             'mean_position_tic': mean_position_tic,
             'mean_transactions': mean_transactions,
@@ -221,18 +232,30 @@ class PortfolioOptimizationEnv(gym.Env):
         # define portfolio return
         rate_of_return = self._asset_memory[-1] / self._asset_memory[-2]
         portfolio_return = rate_of_return - 1
-        mean_return = self._mean_temporal_variation[self._sorted_times[self._time_index]] - 1
+        rate_of_mean_return = self._mean_temporal_variation[self._sorted_times[self._time_index]]
+        mean_return = rate_of_mean_return - 1
 
         # save portfolio return memory
         self._portfolio_return_memory.append(portfolio_return)
 
         # define reward
-        if self.reward_type == 'mean':
-            reward = portfolio_return - mean_return
-        elif self.reward_type == 'log':
-            reward = math.log(rate_of_return)
-        else:
+        if self.reward_type == 'return_absolute':
+            # Процентная доходность
             reward = portfolio_return
+        elif self.reward_type == 'return_log':
+            # Логарифмическая доходность
+            reward = math.log(rate_of_return)
+        elif self.reward_type == 'excess_absolute':
+            # Среднерыночная процентная доходность
+            reward = portfolio_return - mean_return
+        elif self.reward_type == 'excess_relative':
+            # Избыточная доходность
+            reward = rate_of_return / rate_of_mean_return
+        elif self.reward_type == 'excess_log':
+            # Логарифм избыточной доходности
+            reward = math.log(rate_of_return / rate_of_mean_return)
+        else:
+            raise ValueError(f"Unknown reward type: {self.reward_type}")
 
         return state, reward * self.reward_scaling, terminal, False, info
 
