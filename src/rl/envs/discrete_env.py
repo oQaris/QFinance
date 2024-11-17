@@ -5,6 +5,7 @@ import numpy as np
 import pandas as pd
 import quantstats as qs
 from gymnasium import spaces
+from line_profiler import profile
 
 
 class StockTradingEnv(gym.Env):
@@ -37,7 +38,7 @@ class StockTradingEnv(gym.Env):
         self.buy_cost_pct = self.sell_cost_pct = [comission_fee_pct] * self.stock_dim
         self.tech_indicator_list = tech_indicator_list
 
-        self.action_space = spaces.Box(low=-1, high=1, shape=(self.stock_dim,))
+        self.action_space = spaces.MultiDiscrete([2 * self.hmax + 1] * self.stock_dim)  # Buy/Sell/Hold (-hmax to +hmax)
         state_space = 1 + 2 * self.stock_dim + len(tech_indicator_list) * self.stock_dim
         self.observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=(state_space,))
 
@@ -72,13 +73,12 @@ class StockTradingEnv(gym.Env):
         self.state_memory = []
         self.date_memory = [self._get_date()]
 
+    @profile
     def _sell_stock(self, index, action):
         if self.state[index + self.stock_dim + 1] <= 0:
             return 0
 
-        #todo не умножать на лот, а брать ближайшее кратное лоту, но только после перехода на динамический hmax
-        lot = self.data[self.lot_column].values[index]
-        sell_num_shares = min(-action * lot, self.state[index + self.stock_dim + 1])
+        sell_num_shares = min(-action, self.state[index + self.stock_dim + 1])
 
         sell_amount = (
                 self.state[index + 1]
@@ -88,11 +88,11 @@ class StockTradingEnv(gym.Env):
         self.state[0] += sell_amount
 
         if self.state[0] < 0:
-            raise ValueError('asdfasdf')
+            raise ValueError('Недостаточно средств')
 
         self.state[index + self.stock_dim + 1] -= sell_num_shares
         if self.state[index + self.stock_dim + 1] < 0:
-            raise ValueError('asdfasdf3')
+            raise ValueError('Количество акций не может быть отрицательным')
 
         self.cost += (
                 self.state[index + 1]
@@ -103,16 +103,16 @@ class StockTradingEnv(gym.Env):
 
         return sell_num_shares
 
+    @profile
     def _buy_stock(self, index, action):
-        # when buying stocks, we should consider the cost of trading when calculating available_amount, or we may be have cash<0
-        lot = self.data[self.lot_column].values[index]
+        lot = self.data[self.lot_column].values[index]  # todo оптимизировать
         available_amount = int(self.state[0] / (self.state[index + 1] * lot * (1 + self.buy_cost_pct[index])))
 
         if available_amount <= 0:
             return 0
 
         # update balance
-        buy_num_shares = min(available_amount, action * lot)
+        buy_num_shares = min(available_amount, action)
         buy_amount = (
                 self.state[index + 1]
                 * buy_num_shares
@@ -121,20 +121,20 @@ class StockTradingEnv(gym.Env):
         self.state[0] -= buy_amount
 
         if self.state[0] < 0:
-            raise ValueError('asdfasdf')
+            raise ValueError('Недостаточно средств')
 
         self.state[index + self.stock_dim + 1] += buy_num_shares
         if self.state[index + self.stock_dim + 1] < 0:
-            raise ValueError('asdfasdf3')
+            raise ValueError('Количество акций не может быть отрицательным')
 
-        self.cost += (
-                self.state[index + 1] * buy_num_shares * self.buy_cost_pct[index]
-        )
+        self.cost += self.state[index + 1] * buy_num_shares * self.buy_cost_pct[index]
         self.trades += 1
+        # todo добавить лог
 
         return buy_num_shares
 
     def get_terminal_stats(self):
+        # todo учесть комиссию продажи
         end_total_asset = self.state[0] + sum(
             np.array(self.state[1: (self.stock_dim + 1)])
             * np.array(self.state[(self.stock_dim + 1): (self.stock_dim * 2 + 1)])
@@ -143,18 +143,21 @@ class StockTradingEnv(gym.Env):
         df_total_value['date'] = self.date_memory
         df_total_value['daily_return'] = df_total_value['account_value'].pct_change(1)
 
-        sharpe_ratio = qs.stats.sharpe(df_total_value['daily_return'].dropna(), annualize=True)
+        sharpe_ratio = qs.stats.sharpe(df_total_value['daily_return'].dropna())
+        sortino_ratio = qs.stats.sortino(df_total_value['daily_return'].dropna())
         max_draw_down = qs.stats.max_drawdown(df_total_value['account_value'])
 
         return {
             'profit': end_total_asset / self.initial_amount,
             'max_draw_down': max_draw_down,
             'sharpe_ratio': sharpe_ratio,
+            'sortino_ratio': sortino_ratio,
             'fee_ratio': self.cost / self.initial_amount,
             'mean_position_tic': 0,  # todo
             'mean_transactions': self.trades / (self.num_periods - 1),
         }
 
+    @profile
     def step(self, actions):
         terminal = self.time_index >= self.num_periods - 2
         info = {}
@@ -170,8 +173,8 @@ class StockTradingEnv(gym.Env):
                     print(f'{key}: {value}')
             print('=================================')
 
-        actions = actions * self.hmax  # actions initially is scaled between 0 to 1
-        actions = actions.astype(int)  # convert into integer because we can't by fraction of shares
+        actions = actions - self.hmax
+        actions = actions.astype(int)  # This cast might be redundant, but good practice.
         begin_total_asset = self.state[0] + sum(
             np.array(self.state[1: (self.stock_dim + 1)])
             * np.array(self.state[(self.stock_dim + 1): (self.stock_dim * 2 + 1)])
@@ -210,6 +213,31 @@ class StockTradingEnv(gym.Env):
         self.state_memory.append(self.state)  # add current state in state_recorder for each step
 
         return self.state, reward, terminal, False, info
+
+    @profile
+    def action_masks(self):
+        mask = []
+        state = np.array(self.state)
+        buy_cost_pct = np.array(self.buy_cost_pct)
+
+        lot_values = self.data[self.lot_column].values[:self.stock_dim]
+        prices = state[1:self.stock_dim + 1]
+        max_buy = (state[0] / (prices * lot_values * (1 + buy_cost_pct))).astype(int)
+        max_sell = state[self.stock_dim + 1:2 * self.stock_dim + 1].astype(int)
+
+        lot_counts = np.arange(-self.hmax, self.hmax + 1)
+        for i in range(self.stock_dim):
+            action_mask = np.zeros(2 * self.hmax + 1, dtype=int)
+
+            # Векторизированное создание маски
+            buy_mask = (lot_counts > 0) & (lot_counts <= max_buy[i])
+            sell_mask = (lot_counts < 0) & (-lot_counts <= max_sell[i])
+            hold_mask = (lot_counts == 0)
+
+            action_mask[buy_mask | sell_mask | hold_mask] = 1
+            mask.append(action_mask)
+
+        return np.concatenate(mask)
 
     def reset(
             self,
@@ -290,6 +318,7 @@ class StockTradingEnv(gym.Env):
             )
         return state
 
+    @profile
     def _update_state(self):
         state = (
                 [self.state[0]]
@@ -350,3 +379,6 @@ class StockTradingEnv(gym.Env):
         df_actions.columns = self.data[self.tic_column].values
         df_actions.index = df_date.date
         return df_actions
+
+    def get_portfolio_size_history(self):
+        return self.account_value_memory

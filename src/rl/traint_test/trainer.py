@@ -4,16 +4,14 @@ from typing import Callable
 import pandas as pd
 import torch
 from pandas import DataFrame
-from stable_baselines3 import SAC
+from sb3_contrib import MaskablePPO
 from stable_baselines3.common.vec_env import SubprocVecEnv
-from stable_baselines3.sac.policies import SACPolicy
 
 from src.rl.callbacks import EnvTerminalStatsLoggingCallback
 from src.rl.envs.continuous_env import PortfolioOptimizationEnv
 from src.rl.envs.discrete_env import StockTradingEnv
 from src.rl.loaders import split
 from src.rl.models import PolicyGradient
-from src.rl.sac_policy import RNNvsCNNFeaturesExtractor
 
 time_window = 64
 
@@ -146,6 +144,7 @@ def train_PG(env_train):
 
 
 def train_agent(dataset):
+    print('Инициализация среды...')
     # Separate evaluation env
     # eval_env = gym.make('Pendulum-v1')
     # Use deterministic actions for evaluation
@@ -153,24 +152,28 @@ def train_agent(dataset):
     #                              log_path='./logs/', eval_freq=500,
     #                              deterministic=True, render=False)
 
-    exp_name = 'SAC_cnt-rn-cn-64'
-    num_envs = 16
-    env_train = SubprocVecEnv([lambda: build_env(dataset) for _ in range(num_envs)])
+    exp_name = 'MaskablePPO_discrete'
+    num_envs = 8
+    env_train = SubprocVecEnv([lambda: build_discrete_env(dataset) for _ in range(num_envs)])
 
     env_callback = EnvTerminalStatsLoggingCallback()
 
-    total_timesteps = 5_000_000
-    agent = SAC(
-        policy=SACPolicy,
-        policy_kwargs=dict(features_extractor_class=RNNvsCNNFeaturesExtractor),
+    # добавить приоритизированный буфер
+
+    total_timesteps = 50_000_000
+    agent = MaskablePPO(
+        policy='MlpPolicy',
+        # policy_kwargs=dict(features_extractor_class=RNNvsCNNFeaturesExtractor),
         env=env_train,
-        buffer_size=500_000,
+        # replay_buffer_class = PrioritizedSequenceReplayBuffer,
+        # buffer_size=500_000,
         verbose=1,
         tensorboard_log='./tensorboard_log/',
         seed=42
     )
     # agent = SAC.load('trained_models/agent_sac', env=env_train, learning_rate=3e-4)
     try:
+        print('Обучение агента...')
         agent.learn(
             total_timesteps=total_timesteps,
             callback=env_callback,
