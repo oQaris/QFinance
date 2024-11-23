@@ -1,10 +1,8 @@
-import math
-from typing import Callable
-
+import numpy as np
 import pandas as pd
 import torch
 from pandas import DataFrame
-from sb3_contrib import MaskablePPO
+from sb3_contrib import RecurrentPPO
 from stable_baselines3.common.vec_env import SubprocVecEnv
 
 from src.rl.callbacks import EnvTerminalStatsLoggingCallback
@@ -13,7 +11,7 @@ from src.rl.envs.discrete_env import StockTradingEnv
 from src.rl.loaders import split
 from src.rl.models import PolicyGradient
 
-time_window = 64
+time_window = 1
 
 
 def load_dataset():
@@ -38,7 +36,6 @@ def build_env(dataset: DataFrame, verbose=1):
         'window_features': window_features,
         'time_features': time_features,
         'indicators_features': indicators,
-        'reward_type': 'log',
         'verbose': verbose
     }
     dataset = dataset[dataset['tic'].isin(
@@ -100,33 +97,28 @@ def build_discrete_env(dataset: DataFrame, verbose=1):
     return StockTradingEnv(df=dataset, **env_kwargs)
 
 
-def linear_schedule(initial_value: float) -> Callable[[float], float]:
+def custom_learning_rate_schedule(progress: float, max_lr: float, min_lr: float) -> float:
     """
-    Создает линейный планировщик для изменения значения.
-    :param initial_value: начальное значение, например, начальный learning rate.
-    :return: функция, принимающая текущий прогресс (от 1 до 0) и возвращающая значение learning rate.
+    Кастомное расписание для лёрнинг рейта.
+
+    :param progress: Текущий прогресс обучения (от 0 до 1).
+    :param max_lr: Максимальный лёрнинг рейт.
+    :param min_lr: Минимальный лёрнинг рейт.
+    :return: Значение лёрнинг рейта для текущего прогресса.
     """
+    warmup_ratio = 0.05  # Доля времени для разогрева (5% от общего времени)
+    cosine_decay_ratio = 0.70  # Доля времени для косинусного спада (70% от общего времени)
 
-    def schedule(progress_remaining: float) -> float:
-        """
-        Возвращает значение параметра в зависимости от оставшегося прогресса.
-        :param progress_remaining: оставшийся прогресс обучения (от 1.0 до 0.0).
-        :return: текущее значение параметра (learning rate).
-        """
-        return progress_remaining * initial_value
-
-    return schedule
-
-
-def cosine_annealing_schedule(progress_remaining):
-    """
-    Cosine Annealing Schedule для learning_rate.
-    progress_remaining — значение от 1 (начало) до 0 (конец обучения).
-    """
-    initial_rate = 5e-4  # Начальная скорость обучения
-    final_rate = 1e-4  # Минимальная скорость обучения
-    cos_inner = (1 + math.cos(math.pi * (1 - progress_remaining))) / 2
-    return final_rate + (initial_rate - final_rate) * cos_inner
+    if progress < warmup_ratio:
+        # Линейный рост от 0 до max_lr
+        return max_lr * (progress / warmup_ratio)
+    elif progress < warmup_ratio + cosine_decay_ratio:
+        # Косинусное убывание от max_lr до min_lr
+        cosine_progress = (progress - warmup_ratio) / cosine_decay_ratio
+        return min_lr + 0.5 * (max_lr - min_lr) * (1 + np.cos(np.pi * cosine_progress))
+    else:
+        # Поддержание min_lr
+        return min_lr
 
 
 def train_PG(env_train):
@@ -152,17 +144,21 @@ def train_agent(dataset):
     #                              log_path='./logs/', eval_freq=500,
     #                              deterministic=True, render=False)
 
-    exp_name = 'MaskablePPO_discrete'
-    num_envs = 8
-    env_train = SubprocVecEnv([lambda: build_discrete_env(dataset) for _ in range(num_envs)])
+    exp_name = 'PPO_lstm'
+    num_envs = 16
+    env_train = SubprocVecEnv([lambda: build_env(dataset) for _ in range(num_envs)])
 
     env_callback = EnvTerminalStatsLoggingCallback()
 
-    # добавить приоритизированный буфер
+    learning_rate_schedule = lambda progress: custom_learning_rate_schedule(
+        progress, max_lr=3e-4 * 2, min_lr=3e-4 / 3
+    )
 
     total_timesteps = 50_000_000
-    agent = MaskablePPO(
-        policy='MlpPolicy',
+    agent = RecurrentPPO(
+        # policy=CustomDirichletRecurrentPolicy,
+        policy="MultiInputLstmPolicy",
+        learning_rate=learning_rate_schedule,
         # policy_kwargs=dict(features_extractor_class=RNNvsCNNFeaturesExtractor),
         env=env_train,
         # replay_buffer_class = PrioritizedSequenceReplayBuffer,
