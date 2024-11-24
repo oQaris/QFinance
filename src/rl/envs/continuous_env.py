@@ -114,20 +114,20 @@ class PortfolioOptimizationEnv(gym.Env):
         self._portfolio_value = self.initial_amount
 
         # Необходимо для OpenAI Gym
-        self.action_space = spaces.Box(low=0, high=1, shape=(self.portfolio_size + 1,), dtype=np.float32)
+        self.action_space = spaces.Box(low=0, high=1, shape=(self.portfolio_size + 1,), dtype=np.float64)
         self.observation_space = spaces.Dict({
             'price_data': spaces.Box(
                 low=-np.inf, high=np.inf, shape=(len(self.window_features), self.portfolio_size, self.time_window),
-                dtype=np.float32
+                dtype=np.float64
             ),
             'indicators': spaces.Box(
-                low=-np.inf, high=np.inf, shape=(self.portfolio_size, len(self.indicators_features)), dtype=np.float32
+                low=-np.inf, high=np.inf, shape=(self.portfolio_size, len(self.indicators_features)), dtype=np.float64
             ),
             'common_data': spaces.Box(
-                low=-np.inf, high=np.inf, shape=(len(self.time_features),), dtype=np.float32
+                low=-np.inf, high=np.inf, shape=(len(self.time_features),), dtype=np.float64
             ),
             'portfolio_dist': spaces.Box(
-                low=0, high=1, shape=(self.portfolio_size + 1,), dtype=np.float32
+                low=0, high=1, shape=(self.portfolio_size + 1,), dtype=np.float64
             )
         })
         self._reset_memory()
@@ -332,15 +332,19 @@ class PortfolioOptimizationEnv(gym.Env):
 
         to_distribute = self._portfolio_value - reserved
         real_values = discrete_allocation_custom(weights, multipliers, to_distribute)
-        if real_values.sum() > to_distribute:
-            raise ValueError('Error discrete allocation.')
+        sum_allocation = real_values.sum()
+        if sum_allocation > to_distribute:
+            real_values[0] -= sum_allocation - to_distribute
+            if real_values[0] < 0:
+                raise ValueError(
+                    f'Error discrete allocation. {sum_allocation} > {to_distribute} and {real_values[0]} < 0')
 
         # Считаем количество тикеров (без учёта кеша)
         tic_counts = np.array([int(np.round(x)) for x in (real_values[1:] / tic_price)])
         diff_tic_counts = tic_counts - self._tic_counts_memory[-1]
 
         # Откатываем незначительные транзакции (менее 0.5% портфеля) для минимизации комиссии и стабилизации агента
-        threshold = real_values.sum() * 0.005
+        threshold = real_values.sum() * self.transaction_threshold_ratio
         new_diff_tic_counts = minimize_transactions(tic_price, diff_tic_counts, threshold, real_values[0])
         new_tic_counts = self._tic_counts_memory[-1] + new_diff_tic_counts
         new_real_values = tic_price * new_tic_counts
@@ -358,6 +362,7 @@ class PortfolioOptimizationEnv(gym.Env):
         return new_real_values, fee, new_tic_counts
 
     def reset(self, seed=None, options=None):
+        super().reset(seed=seed)
         self.commission_paid = 0
         self.num_of_transactions = 0
         # time_index must start a little bit in the future to implement lookback
