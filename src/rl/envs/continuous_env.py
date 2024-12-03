@@ -9,6 +9,7 @@ import pandas as pd
 import quantstats as qs
 from gymnasium import spaces
 
+from src.rl.algs import utils
 from src.rl.algs.distributor import discrete_allocation_custom, minimize_transactions
 
 
@@ -142,7 +143,6 @@ class PortfolioOptimizationEnv(gym.Env):
             'portfolio_values': self._asset_memory,
             'tic_counts': self._tic_counts_memory
         })
-        metrics_df.set_index('date', inplace=True)
 
         # Считаем среднее число транзакций без учёта первых покупок
         final_num_transactions = self.num_of_transactions - np.count_nonzero(self._tic_counts_memory[0])
@@ -155,8 +155,7 @@ class PortfolioOptimizationEnv(gym.Env):
 
         # Берёт с отрицанием, чтобы просадка была положительной
         max_draw_down = -qs.stats.max_drawdown(metrics_df['portfolio_values'])
-        sharpe_ratio = qs.stats.sharpe(metrics_df['returns'])
-        sortino_ratio = qs.stats.sortino(metrics_df['returns'])
+        sharpe_ratio, sortino_ratio = utils.sharpe_sortino(metrics_df)
         fee_ratio = self.commission_paid / self.initial_amount
 
         # Первый элемент не учитываем, т.к. там нули

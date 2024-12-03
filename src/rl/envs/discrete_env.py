@@ -7,6 +7,8 @@ import quantstats as qs
 from gymnasium import spaces
 from line_profiler import profile
 
+from src.rl.algs import utils
+
 
 class StockTradingEnv(gym.Env):
 
@@ -141,10 +143,8 @@ class StockTradingEnv(gym.Env):
         )
         df_total_value = pd.DataFrame(self.account_value_memory, columns=['account_value'])
         df_total_value['date'] = self.date_memory
-        df_total_value['daily_return'] = df_total_value['account_value'].pct_change(1)
-
-        sharpe_ratio = qs.stats.sharpe(df_total_value['daily_return'].dropna())
-        sortino_ratio = qs.stats.sortino(df_total_value['daily_return'].dropna())
+        df_total_value['returns'] = df_total_value['account_value'].pct_change(1).dropna()
+        sharpe_ratio, sortino_ratio = utils.sharpe_sortino(df_total_value)
         max_draw_down = qs.stats.max_drawdown(df_total_value['account_value'])
 
         return {

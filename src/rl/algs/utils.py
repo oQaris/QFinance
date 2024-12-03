@@ -1,5 +1,26 @@
+import matplotlib.pyplot as plt
+import numpy as np
 import pandas as pd
+import quantstats as qs
 
+# см. значение за год - https://cbr.ru/hd_base/zcyc_params/zcyc/
+yearly_risk_free_rate = 0.2268
+
+
+def sharpe_sortino(df):
+    # Вычисляем среднюю разницу между датами
+    avg_diff = df['date'].diff().dropna().mean()
+    # Рассчитываем количество периодов в году, учитывая високосные
+    periods_per_year = pd.Timedelta(days=365.25) / avg_diff
+    args = {
+        'rf': yearly_risk_free_rate,
+        'periods': periods_per_year,
+        'annualize': True,
+        'smart': True
+    }
+    sharpe_ratio = qs.stats.sharpe(df['returns'], **args)
+    sortino_ratio = qs.stats.sortino(df['returns'], **args)
+    return sharpe_ratio, sortino_ratio
 
 def calculate_periods_per_year(data):
     tickers = data['tic'].unique()
@@ -19,12 +40,49 @@ def calculate_periods_per_year(data):
     return sum(periods_list) / len(periods_list)
 
 
+# Функция для добавления безубыточного актива на график
+def plot_with_risk_free(portfolio, n_periods, rf_rate):
+    # Ежедневная доходность безубыточного актива (rf_rate соответствует годовому значению)
+    len_trade = len(portfolio)
+    daily_rf_rate = (1 + rf_rate) ** (1 / n_periods) - 1
+    risk_free_portfolio = portfolio[0] * (1 + daily_rf_rate) ** np.arange(len_trade)
+
+    # Построение графика
+    plt.figure(figsize=(12, 6))
+    plt.plot(portfolio, label="Стратегия", color="green")
+    plt.plot(risk_free_portfolio, label=f"Безубыточный актив ({rf_rate * 100:.2f}% годовых)", color="blue",
+             linestyle="--")
+
+    # Настройки графика
+    plt.title(f"Изменение размера портфеля", fontsize=16)
+    plt.xlabel("Периоды", fontsize=14)
+    plt.ylabel("Размер портфеля", fontsize=14)
+    plt.legend(fontsize=12)
+    plt.grid(alpha=0.3)
+    plt.show()
+
+
 if __name__ == '__main__':
     # Пример использования
-    df = pd.DataFrame({
-        'date': pd.date_range(start='2023-01-01', end='2023-12-31', freq='15min').tolist() * 2,  # 15-минутные интервалы
-        'tic': ['AAPL'] * 34945 + ['MSFT'] * 34945  # Пример данных
+    date_list = pd.date_range(start='2023-01-01', end='2023-12-31', freq='15min').tolist()
+    test_df = pd.DataFrame({
+        'date': date_list * 2,  # интервалы
+        'tic': ['AAPL'] * len(date_list) + ['MSFT'] * len(date_list)  # Пример данных
     })
 
-    periods = calculate_periods_per_year(df)
-    print("Количество периодов в году:", periods)
+    test_periods = calculate_periods_per_year(test_df)
+    print("Количество периодов в году:", test_periods)
+
+    test_df = pd.DataFrame({
+        'date': date_list,
+        'returns': pd.Series(np.random.normal(0.00001, 0.0025, len(date_list)))
+    })
+    test_sharpe_ratio, test_sortino_ratio = sharpe_sortino(test_df)
+    print("sharpe:", test_sharpe_ratio)
+    print("sortino:", test_sortino_ratio)
+
+    initial_capital = 100
+    test_portfolio = initial_capital * (1 + test_df['returns']).cumprod()
+
+    # Построение графика
+    plot_with_risk_free(test_portfolio, test_periods, yearly_risk_free_rate)
