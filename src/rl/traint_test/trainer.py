@@ -1,8 +1,10 @@
 import numpy as np
 import pandas as pd
 import torch
+from gymnasium.utils.env_checker import check_env as check_gym
 from pandas import DataFrame
 from sb3_contrib import RecurrentPPO
+from stable_baselines3.common.env_checker import check_env
 from stable_baselines3.common.vec_env import SubprocVecEnv
 
 from src.rl.callbacks import EnvTerminalStatsLoggingCallback
@@ -12,6 +14,11 @@ from src.rl.loaders import split
 from src.rl.models import PolicyGradient
 
 time_window = 1
+initial_amount = 1_000_000
+fee_ratio = 0.003
+env_check = True
+subset_tics = None
+# subset_tics = ['AFLT', 'GMKN', 'MOEX', 'TCSG', 'MAGN', 'LKOH', 'NLMK', 'OZON', 'POLY', 'SBER', 'VKCO', 'YDEX']
 
 
 def load_dataset():
@@ -19,93 +26,64 @@ def load_dataset():
     return split(dataset, train_ratio=0.8, stratification=time_window)
 
 
-def build_env(dataset: DataFrame, verbose=1):
+def prepare_columns(columns):
     allux_cols = ['date', 'tic', 'lot', 'price']
     window_features = ['open',
                        'close',
                        'high',
                        'low',
                        'volume']
-    time_features = ['vix'] + [f for f in dataset.columns if f.endswith('_sin') or f.endswith('_cos')]
-    indicators = [f for f in dataset.columns if
+    time_features = ['vix'] + [f for f in columns if f.endswith('_sin') or f.endswith('_cos')]
+    indicators = [f for f in columns if
                   f not in allux_cols and f not in window_features and f not in time_features][1:]
+    return window_features, time_features, indicators
+
+
+def build_env(dataset: DataFrame, verbose=1):
+    window_features, time_features, indicators = prepare_columns(dataset.columns)
     env_kwargs = {
-        'initial_amount': 1000000,
-        'fee_ratio': 0.003,
+        'initial_amount': initial_amount,
+        'fee_ratio': fee_ratio,
         'time_window': time_window,
         'window_features': window_features,
         'time_features': time_features,
         'indicators_features': indicators,
         'verbose': verbose
     }
-    dataset = dataset[dataset['tic'].isin(
-        ['AFLT', 'GMKN', 'MOEX', 'TCSG', 'MAGN', 'LKOH', 'NLMK', 'OZON', 'POLY', 'SBER', 'VKCO', 'YDEX'])].copy()
+    if subset_tics is not None:
+        dataset = dataset[dataset['tic'].isin(subset_tics)].copy()
     env = PortfolioOptimizationEnv(dataset, **env_kwargs)
-    # check_env(env)
+    if env_check:
+        check_gym(env)
+        check_env(env)
     return env
 
 
 def build_discrete_env(dataset: DataFrame, verbose=1):
-    # todo создавать автоматически
-    ind_list = [
-        'macd',
-        'macdh',
-        'rsi_14',
-        'atr_14',
-        'adx',
-        'cci_14',
-        'stochrsi',
-        'wr_14',
-        'pdi',
-        'ndi',
-        'trix',
-        'dma',
-        'cmo',
-        'close_14_roc',
-        'return_lag_1',
-        'return_lag_7',
-        'return_lag_29',
-        'P/FCF',
-        'P/E',
-        'P/B',
-        'P/S',
-        'P/CF',
-        'EV/S',
-        'EV/EBITDA',
-        'EV/EBIT',
-        'Коэффициент долга',
-        'D/E',
-        'CAPEX/Выручка',
-        'NetDebt/EBITDA',
-        'Долг/EBITDA',
-        'ROE',
-        'ROA',
-        'Return on Sales',
-        'ROIC',
-        'ROCE',
-        'Net Margin',
-        'Операционная маржа',
-        'EBITDA рентабельность',
-        'Тек. ливкидность'
-    ]
+    _, _, indicators = prepare_columns(dataset.columns)
     env_kwargs = {
-        'initial_amount': 1000000,
-        'comission_fee_pct': 0.003,
-        'tech_indicator_list': ind_list,
+        'initial_amount': initial_amount,
+        'comission_fee_pct': fee_ratio,
+        'tech_indicator_list': indicators,
         'verbose': verbose
     }
-    return StockTradingEnv(df=dataset, **env_kwargs)
+    env = StockTradingEnv(df=dataset, **env_kwargs)
+    if env_check:
+        check_gym(env)
+        check_env(env)
+    return env
 
 
-def custom_learning_rate_schedule(progress: float, max_lr: float, min_lr: float) -> float:
+def custom_learning_rate_schedule(remaining_progress: float, max_lr: float, min_lr: float) -> float:
     """
     Кастомное расписание для лёрнинг рейта.
 
-    :param progress: Текущий прогресс обучения (от 0 до 1).
+    :param remaining_progress: Оставшийся прогресс обучения (от 0 до 1).
     :param max_lr: Максимальный лёрнинг рейт.
     :param min_lr: Минимальный лёрнинг рейт.
     :return: Значение лёрнинг рейта для текущего прогресса.
     """
+    progress = 1 - remaining_progress
     warmup_ratio = 0.05  # Доля времени для разогрева (5% от общего времени)
     cosine_decay_ratio = 0.70  # Доля времени для косинусного спада (70% от общего времени)
 
