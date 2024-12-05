@@ -9,7 +9,7 @@ yearly_risk_free_rate = 0.2268
 
 def sharpe_sortino(df):
     # Вычисляем среднюю разницу между датами
-    avg_diff = df['date'].diff().dropna().mean()
+    avg_diff = pd.to_datetime(df['date']).diff().dropna().mean()
     # Рассчитываем количество периодов в году, учитывая високосные
     periods_per_year = pd.Timedelta(days=365.25) / avg_diff
     args = {

@@ -122,20 +122,20 @@ def train_agent(dataset):
     #                              log_path='./logs/', eval_freq=500,
     #                              deterministic=True, render=False)
 
-    exp_name = 'PPO_lstm'
+    exp_name = 'PPO_lstm_discrete'
     num_envs = 16
-    env_train = SubprocVecEnv([lambda: build_env(dataset) for _ in range(num_envs)])
+    env_train = SubprocVecEnv([lambda: build_discrete_env(dataset) for _ in range(num_envs)])
 
     env_callback = EnvTerminalStatsLoggingCallback()
 
     learning_rate_schedule = lambda progress: custom_learning_rate_schedule(
-        progress, max_lr=3e-4 * 2, min_lr=3e-4 / 3
+        progress, max_lr=0.01, min_lr=0.01
     )
 
-    total_timesteps = 50_000_000
+    total_timesteps = 5_000_000
     agent = RecurrentPPO(
         # policy=CustomDirichletRecurrentPolicy,
-        policy="MultiInputLstmPolicy",
+        policy="MlpLstmPolicy",
         learning_rate=learning_rate_schedule,
         # policy_kwargs=dict(features_extractor_class=RNNvsCNNFeaturesExtractor),
         env=env_train,

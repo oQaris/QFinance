@@ -40,9 +40,9 @@ class StockTradingEnv(gym.Env):
         self.buy_cost_pct = self.sell_cost_pct = [comission_fee_pct] * self.stock_dim
         self.tech_indicator_list = tech_indicator_list
 
-        self.action_space = spaces.MultiDiscrete([2 * self.hmax + 1] * self.stock_dim)  # Buy/Sell/Hold (-hmax to +hmax)
+        self.action_space = spaces.Box(low=-1, high=1, shape=(self.stock_dim,), dtype=np.float64)
         state_space = 1 + 2 * self.stock_dim + len(tech_indicator_list) * self.stock_dim
-        self.observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=(state_space,))
+        self.observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=(state_space,), dtype=np.float64)
 
         self.valuation_column = valuation_column
         self.time_column = time_column
@@ -75,12 +75,19 @@ class StockTradingEnv(gym.Env):
         self.state_memory = []
         self.date_memory = [self._get_date()]
 
+        # Оптимизация: предвычисляем лоты для каждого тикера
+        lots_per_tic = self.df.groupby(self.tic_column)[self.lot_column].unique()
+        if any(len(lots) > 1 for lots in lots_per_tic):
+            raise ValueError("Лоты для одного тикера не совпадают во всем датасете.")
+        self.lots = lots_per_tic.values.flatten()
+
     @profile
     def _sell_stock(self, index, action):
         if self.state[index + self.stock_dim + 1] <= 0:
             return 0
 
-        sell_num_shares = min(-action, self.state[index + self.stock_dim + 1])
+        lot = self.lots[index]
+        sell_num_shares = min(-action * lot, self.state[index + self.stock_dim + 1])
 
         sell_amount = (
                 self.state[index + 1]
@@ -107,14 +114,14 @@ class StockTradingEnv(gym.Env):
 
     @profile
     def _buy_stock(self, index, action):
-        lot = self.data[self.lot_column].values[index]  # todo оптимизировать
+        lot = self.lots[index]
         available_amount = int(self.state[0] / (self.state[index + 1] * lot * (1 + self.buy_cost_pct[index])))
 
         if available_amount <= 0:
             return 0
 
         # update balance
-        buy_num_shares = min(available_amount, action)
+        buy_num_shares = min(available_amount, action * lot)
         buy_amount = (
                 self.state[index + 1]
                 * buy_num_shares
@@ -129,7 +136,7 @@ class StockTradingEnv(gym.Env):
         if self.state[index + self.stock_dim + 1] < 0:
             raise ValueError('Количество акций не может быть отрицательным')
 
-        self.cost += self.state[index + 1] * buy_num_shares * self.buy_cost_pct[index]
+        self.cost += (self.state[index + 1] * buy_num_shares * self.buy_cost_pct[index]).item()
         self.trades += 1
         # todo добавить лог
 
@@ -145,7 +152,10 @@ class StockTradingEnv(gym.Env):
         df_total_value['date'] = self.date_memory
         df_total_value['returns'] = df_total_value['account_value'].pct_change(1).dropna()
         sharpe_ratio, sortino_ratio = utils.sharpe_sortino(df_total_value)
-        max_draw_down = qs.stats.max_drawdown(df_total_value['account_value'])
+        max_draw_down = -qs.stats.max_drawdown(df_total_value['account_value'])
+
+        positions = np.array(self.state_memory)[:, self.stock_dim + 1:2 * self.stock_dim + 1]
+        mean_position_tic = np.count_nonzero(positions, axis=1).mean()
 
         return {
             'profit': end_total_asset / self.initial_amount,
@@ -153,7 +163,7 @@ class StockTradingEnv(gym.Env):
             'sharpe_ratio': sharpe_ratio,
             'sortino_ratio': sortino_ratio,
             'fee_ratio': self.cost / self.initial_amount,
-            'mean_position_tic': 0,  # todo
+            'mean_position_tic': mean_position_tic,
             'mean_transactions': self.trades / (self.num_periods - 1),
         }
 
@@ -173,7 +183,7 @@ class StockTradingEnv(gym.Env):
                     print(f'{key}: {value}')
             print('=================================')
 
-        actions = actions - self.hmax
+        actions = actions * self.hmax
         actions = actions.astype(int)  # This cast might be redundant, but good practice.
         begin_total_asset = self.state[0] + sum(
             np.array(self.state[1: (self.stock_dim + 1)])
@@ -245,6 +255,7 @@ class StockTradingEnv(gym.Env):
             seed=None,
             options=None,
     ):
+        super().reset(seed=seed)
         # initiate state
         self.time_index = 0
         self.data = self.df.loc[self.time_index, :]
@@ -316,7 +327,7 @@ class StockTradingEnv(gym.Env):
                 [],
             )
             )
-        return state
+        return np.array(state)
 
     @profile
     def _update_state(self):
@@ -332,7 +343,7 @@ class StockTradingEnv(gym.Env):
             [],
         )
         )
-        return state
+        return np.array(state)
 
     def _get_date(self):
         return self.data[self.time_column].unique()[0]
