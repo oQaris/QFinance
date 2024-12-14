@@ -13,6 +13,7 @@ def get_start_end_dates(dataset):
 
 
 def split(dataset, train_ratio=0.8, stratification=0):
+    dataset = dataset.copy()
     dates = pd.to_datetime(dataset['date'], format=DATE_FORMAT)
     dataset['day'] = dates.dt.date
 

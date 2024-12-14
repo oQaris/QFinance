@@ -22,16 +22,17 @@ def sharpe_sortino(df):
     sortino_ratio = qs.stats.sortino(df['returns'], **args)
     return sharpe_ratio, sortino_ratio
 
-def calculate_periods_per_year(data):
-    tickers = data['tic'].unique()
+
+def calculate_periods_per_year(df):
+    tickers = df['tic'].unique()
     periods_list = []
 
     for tic in tickers:
-        tic_data = data[data['tic'] == tic].copy()
+        tic_data = df[df['tic'] == tic].copy()
         tic_data = tic_data.sort_values(by='date')
 
         # Вычисляем среднюю разницу между датами
-        avg_diff = tic_data['date'].diff().dropna().mean()
+        avg_diff = pd.to_datetime(tic_data['date']).diff().dropna().mean()
 
         # Рассчитываем количество периодов в году, учитывая високосные
         periods_per_year = pd.Timedelta(days=365.25) / avg_diff
@@ -41,19 +42,17 @@ def calculate_periods_per_year(data):
 
 
 # Функция для добавления безубыточного актива на график
-def plot_with_risk_free(portfolio, n_periods, rf_rate):
-    # Ежедневная доходность безубыточного актива (rf_rate соответствует годовому значению)
+def plot_with_risk_free(portfolio, n_periods_per_year, rf_rate=yearly_risk_free_rate):
     len_trade = len(portfolio)
-    daily_rf_rate = (1 + rf_rate) ** (1 / n_periods) - 1
+    daily_rf_rate = (1 + rf_rate) ** (1 / n_periods_per_year) - 1
     risk_free_portfolio = portfolio[0] * (1 + daily_rf_rate) ** np.arange(len_trade)
 
-    # Построение графика
     plt.figure(figsize=(12, 6))
-    plt.plot(portfolio, label="Стратегия", color="green")
-    plt.plot(risk_free_portfolio, label=f"Безубыточный актив ({rf_rate * 100:.2f}% годовых)", color="blue",
-             linestyle="--")
+    plt.plot(portfolio, label="Стратегия",
+             color="green")
+    plt.plot(risk_free_portfolio, label=f"Безубыточный актив ({rf_rate * 100:.2f}% годовых)",
+             color="blue", linestyle="--")
 
-    # Настройки графика
     plt.title(f"Изменение размера портфеля", fontsize=16)
     plt.xlabel("Периоды", fontsize=14)
     plt.ylabel("Размер портфеля", fontsize=14)
@@ -85,4 +84,4 @@ if __name__ == '__main__':
     test_portfolio = initial_capital * (1 + test_df['returns']).cumprod()
 
     # Построение графика
-    plot_with_risk_free(test_portfolio, test_periods, yearly_risk_free_rate)
+    plot_with_risk_free(test_portfolio, test_periods)
