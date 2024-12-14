@@ -117,7 +117,7 @@ def train_agent(dataset):
         progress, max_lr=0.001, min_lr=0.001
     )
 
-    action_dim = env_eval.action_space.shape
+    action_dim = env_eval.action_space.shape[0]
     features_dim = 1024
     policy_kwargs = dict(
         features_extractor_class=GeGLUFFNNetExtractor,
