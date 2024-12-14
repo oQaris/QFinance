@@ -8,6 +8,7 @@ from gymnasium import spaces
 from line_profiler import profile
 
 from src.rl.algs import utils
+from src.rl.algs.utils import plot_with_risk_free, calculate_periods_per_year
 
 
 class StockTradingEnv(gym.Env):
@@ -27,40 +28,45 @@ class StockTradingEnv(gym.Env):
             time_index=0,
             previous_state=None,
     ):
+        # данные
         df = df.sort_values(['date', 'tic'], ignore_index=True)
         df.index = df['date'].factorize()[0]
         self.df = df
         self.num_periods = len(self.df.index.unique())
-
         self.time_index = time_index
+        self.data = self.df.loc[self.time_index, :]
+
+        # среда
         self.hmax = hmax
         self.stock_dim = len(df.tic.unique())
         self.num_stock_shares = [0] * self.stock_dim
         self.initial_amount = initial_amount  # get the initial cash
         self.buy_cost_pct = self.sell_cost_pct = [comission_fee_pct] * self.stock_dim
         self.tech_indicator_list = tech_indicator_list
+        self.verbose = verbose
+        self.previous_state = previous_state
 
-        self.action_space = spaces.Box(low=-1, high=1, shape=(self.stock_dim,), dtype=np.float64)
-        state_space = 1 + 2 * self.stock_dim + len(tech_indicator_list) * self.stock_dim
-        self.observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=(state_space,), dtype=np.float64)
-
+        # столбцы
         self.valuation_column = valuation_column
         self.time_column = time_column
         self.tic_column = tic_column
         self.lot_column = lot_column
 
-        self.data = self.df.loc[self.time_index, :]
-        self.verbose = verbose
-        self.previous_state = previous_state
-        # initalize state
-        self.state = self._initiate_state()
+        # для фреймворка Gym
+        self.action_space = spaces.Box(low=-1, high=1, shape=(self.stock_dim,), dtype=np.float32)
+        state_space = 1 + 2 * self.stock_dim + len(tech_indicator_list) * self.stock_dim
+        self.observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=(state_space,), dtype=np.float32)
+        self.metadata = {'render_modes': ['human']}
+        self.render_mode = 'human'
 
+        # инициализация состояния
+        self.state = self._initiate_state()
         self.turbulence = 0
         self.cost = 0
         self.trades = 0
         self.episode = 0
-        # memorize all the total balance change
-        # the initial total asset is calculated by cash + sum (num_share_stock_i * price_stock_i)
+
+        # память эпизода
         self.asset_memory = [
             self.initial_amount
             + np.sum(
@@ -71,7 +77,6 @@ class StockTradingEnv(gym.Env):
         self.rewards_memory = []
         self.actions_memory = []
         self.account_value_memory = [self.initial_amount]
-        # we need sometimes to preserve the state in the middle of trading process
         self.state_memory = []
         self.date_memory = [self._get_date()]
 
@@ -86,11 +91,11 @@ class StockTradingEnv(gym.Env):
         if self.state[index + self.stock_dim + 1] <= 0:
             return 0
 
-        lot = self.lots[index]
-        sell_num_shares = min(-action * lot, self.state[index + self.stock_dim + 1])
+        lot = self.lots[index].item()
+        sell_num_shares = min(-action * lot, self.state[index + self.stock_dim + 1].item())
 
         sell_amount = (
-                self.state[index + 1]
+                self.state[index + 1].item()
                 * sell_num_shares
                 * (1 - self.sell_cost_pct[index])
         )
@@ -104,26 +109,27 @@ class StockTradingEnv(gym.Env):
             raise ValueError('Количество акций не может быть отрицательным')
 
         self.cost += (
-                self.state[index + 1]
+                self.state[index + 1].item()
                 * sell_num_shares
                 * self.sell_cost_pct[index]
         )
         self.trades += 1
+        # todo добавить лог
 
         return sell_num_shares
 
     @profile
     def _buy_stock(self, index, action):
-        lot = self.lots[index]
-        available_amount = int(self.state[0] / (self.state[index + 1] * lot * (1 + self.buy_cost_pct[index])))
+        lot = self.lots[index].item()
+        available_amount = int(
+            self.state[0].item() / (self.state[index + 1].item() * lot * (1 + self.buy_cost_pct[index])))
 
         if available_amount <= 0:
             return 0
 
-        # update balance
         buy_num_shares = min(available_amount, action * lot)
         buy_amount = (
-                self.state[index + 1]
+                self.state[index + 1].item()
                 * buy_num_shares
                 * (1 + self.buy_cost_pct[index])
         )
@@ -136,7 +142,7 @@ class StockTradingEnv(gym.Env):
         if self.state[index + self.stock_dim + 1] < 0:
             raise ValueError('Количество акций не может быть отрицательным')
 
-        self.cost += (self.state[index + 1] * buy_num_shares * self.buy_cost_pct[index]).item()
+        self.cost += self.state[index + 1].item() * buy_num_shares * self.buy_cost_pct[index]
         self.trades += 1
         # todo добавить лог
 
@@ -169,7 +175,7 @@ class StockTradingEnv(gym.Env):
 
     @profile
     def step(self, actions):
-        terminal = self.time_index >= self.num_periods - 2
+        terminal = self.is_terminal_state()
         info = {}
 
         if terminal:
@@ -220,7 +226,7 @@ class StockTradingEnv(gym.Env):
         reward = end_total_asset - begin_total_asset
         self.rewards_memory.append(reward)
         reward = reward / self.initial_amount * 100
-        self.state_memory.append(self.state)  # add current state in state_recorder for each step
+        self.state_memory.append(self.state)
 
         return self.state, reward, terminal, False, info
 
@@ -327,7 +333,7 @@ class StockTradingEnv(gym.Env):
                 [],
             )
             )
-        return np.array(state)
+        return np.array(state, dtype=np.float32)
 
     @profile
     def _update_state(self):
@@ -343,53 +349,17 @@ class StockTradingEnv(gym.Env):
             [],
         )
         )
-        return np.array(state)
+        return np.array(state, dtype=np.float32)
 
     def _get_date(self):
         return self.data[self.time_column].unique()[0]
 
-    # add save_state_memory to preserve state in the trading process
-    def save_state_memory(self):
-        # date and close price length must match actions length
-        date_list = self.date_memory[:-1]
-        df_date = pd.DataFrame(date_list)
-        df_date.columns = ['date']
+    def render(self):
+        if self.is_terminal_state():
+            plot_with_risk_free(self.account_value_memory, calculate_periods_per_year(self.df))
 
-        state_list = self.state_memory
-        df_states = pd.DataFrame(
-            state_list,
-            columns=[
-                'cash',
-                'Bitcoin_price',
-                'Gold_price',
-                'Bitcoin_num',
-                'Gold_num',
-                'Bitcoin_Disable',
-                'Gold_Disable',
-            ],
-        )
-        df_states.index = df_date.date
-        return df_states
-
-    def save_asset_memory(self):
-        date_list = self.date_memory
-        asset_list = self.asset_memory
-        df_account_value = pd.DataFrame(
-            {'date': date_list, 'account_value': asset_list}
-        )
-        return df_account_value
-
-    def save_action_memory(self):
-        # date and close price length must match actions length
-        date_list = self.date_memory[:-1]
-        df_date = pd.DataFrame(date_list)
-        df_date.columns = ['date']
-
-        action_list = self.actions_memory
-        df_actions = pd.DataFrame(action_list)
-        df_actions.columns = self.data[self.tic_column].values
-        df_actions.index = df_date.date
-        return df_actions
+    def is_terminal_state(self):
+        return self.time_index >= self.num_periods - 2
 
     def get_portfolio_size_history(self):
         return self.account_value_memory
