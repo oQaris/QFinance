@@ -7,12 +7,13 @@ from gymnasium import spaces
 from sb3_contrib.common.recurrent.policies import RecurrentMultiInputActorCriticPolicy
 from stable_baselines3.common.distributions import Distribution
 from stable_baselines3.common.policies import ActorCriticPolicy
-from stable_baselines3.common.preprocessing import get_action_dim
+from stable_baselines3.common.preprocessing import get_action_dim, get_flattened_obs_dim
 from stable_baselines3.common.torch_layers import BaseFeaturesExtractor, CombinedExtractor
 from stable_baselines3.common.type_aliases import Schedule
 from torch import nn
 
 from src.rl.architectures.base import BaseNetwork
+from src.rl.architectures.geglu_ffn import GeGLUFFNNetwork
 from src.rl.architectures.rnn import RNNPolicyNetwork
 from src.rl.distr import DirichletDistribution
 
@@ -65,6 +66,23 @@ class CustomActorCriticPolicy(ActorCriticPolicy):
                                                        window_size=window_size,
                                                        indicators_num=indicators_num,
                                                        common_num=common_num)
+
+
+class GeGLUFFNNetExtractor(BaseFeaturesExtractor):
+    def __init__(self,
+                 observation_space: gym.Space,
+                 features_dim: int = 1024) -> None:
+        super().__init__(observation_space, features_dim)
+        input_dim = get_flattened_obs_dim(observation_space)
+        self.flatten = nn.Flatten()
+        self.linear = nn.Linear(input_dim, features_dim)
+        self.geglu_ffn_net = GeGLUFFNNetwork(dim=features_dim, num_blocks=5)
+
+    def forward(self, observations: th.Tensor) -> th.Tensor:
+        x = self.flatten(observations)
+        x = self.linear(x)
+        x = self.geglu_ffn_net(x)
+        return x
 
 
 class CustomDirichletRecurrentPolicy(RecurrentMultiInputActorCriticPolicy):
