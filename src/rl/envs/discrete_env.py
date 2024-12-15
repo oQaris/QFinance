@@ -206,6 +206,7 @@ class StockTradingEnv(gym.Env):
         for index in buy_index:
             actions[index] = self._buy_stock(index, actions[index])
 
+        self.log_transactions(actions)
         self.actions_memory.append(actions)
 
         # Переход к следующему состоянию
@@ -229,6 +230,28 @@ class StockTradingEnv(gym.Env):
         self.state_memory.append(self.state)
 
         return self.state, reward, terminal, False, info
+
+    def log_transactions(self, actions):
+        if self.verbose > 1:
+            date = self._get_date()
+            tics = self.data[self.tic_column].values
+
+            nonzero_indices = np.nonzero(actions)
+            for idx in nonzero_indices[0]:
+                elem = actions[idx]
+                if elem > 0:
+                    print(f'{date}: куплено {elem} акций {tics[idx]}')
+                elif elem < 0:
+                    print(f'{date}: продано {-elem} акций {tics[idx]}')
+
+            if np.any(actions != 0):
+                open_positions = np.count_nonzero(self.state[self.stock_dim + 1: 2 * self.stock_dim + 1])
+                print(f'Открыто {open_positions} позиций:')
+                held_shares = self.state[self.stock_dim + 1: 2 * self.stock_dim + 1]
+                for idx in range(self.stock_dim):
+                    if held_shares[idx] > 0:
+                        print(f'{tics[idx]}={held_shares[idx]}', end=', ')
+                print(f'\nСвободных денег: {self.state[0]}')
 
     @profile
     def action_masks(self):

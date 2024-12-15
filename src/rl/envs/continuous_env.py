@@ -11,6 +11,7 @@ from gymnasium import spaces
 
 from src.rl.algs import utils
 from src.rl.algs.distributor import discrete_allocation_custom, minimize_transactions
+from src.rl.algs.utils import plot_with_risk_free, calculate_periods_per_year
 
 
 def _softmax(x):
@@ -48,7 +49,7 @@ class PortfolioOptimizationEnv(gym.Env):
             reward_type='excess_log',
             reward_scaling=10,
             fee_ratio=0.003,
-            transaction_threshold_ratio=0.01,
+            transaction_threshold_ratio=0.005,
             verbose=0,
     ):
         """
@@ -131,6 +132,8 @@ class PortfolioOptimizationEnv(gym.Env):
                 low=0, high=1, shape=(self.portfolio_size + 1,), dtype=np.float64
             )
         })
+        self.metadata = {'render_modes': ['human']}
+        self.render_mode = 'human'
         self._reset_memory()
 
     def is_pred_terminal_state(self):
@@ -173,30 +176,19 @@ class PortfolioOptimizationEnv(gym.Env):
         }
 
     def step(self, actions):
-        terminal = (self._time_index >= len(self._sorted_times) - 2)
+        terminal = self.is_terminal_state()
         info = {}
-
-        if terminal:
-            terminal_stats = self.get_terminal_stats()
-            info['terminal_stats'] = terminal_stats
-            if self.verbose >= 1:
-                print('\n=================================')
-                print(f'Initial portfolio value:{self.initial_amount}')
-                print(f'Final portfolio value: {self._portfolio_value}')
-                for key, value in terminal_stats.items():
-                    print(f'{key}: {value}')
-                print('=================================')
 
         # transform action to numpy array (if it's a list)
         # actions = np.array(actions, dtype=np.float32)
 
         # if necessary, normalize weights
-        if np.sum(actions) == 1 and np.min(actions) >= 0:
-            weights = actions
+        if np.abs(np.sum(actions) - 1) < 1e-4 and np.min(actions) >= 0:
+            weights = actions / np.sum(actions)
         else:
             # print('_custom_softmax')
-            # weights = _custom_softmax(actions)
-            weights = _softmax(actions)
+            weights = _custom_softmax(actions)
+            # weights = _softmax(actions)
             # weights = actions / actions.sum()
 
         # save initial portfolio weights for this time step
@@ -219,6 +211,7 @@ class PortfolioOptimizationEnv(gym.Env):
         # calculate new portfolio value and weights
         self._portfolio_value = np.sum(new_portfolio)
         final_weights = new_portfolio / self._portfolio_value
+        state['portfolio_dist'] = final_weights
 
         # save final portfolio value and weights of this time step
         self._asset_memory.append(self._portfolio_value)
@@ -255,6 +248,17 @@ class PortfolioOptimizationEnv(gym.Env):
             reward = math.log(rate_of_return / rate_of_mean_return)
         else:
             raise ValueError(f"Unknown reward type: {self.reward_type}")
+
+        if terminal:
+            terminal_stats = self.get_terminal_stats()
+            info['terminal_stats'] = terminal_stats
+            if self.verbose >= 1:
+                print('\n=================================')
+                print(f'Initial portfolio value:{self.initial_amount}')
+                print(f'Final portfolio value: {self._portfolio_value}')
+                for key, value in terminal_stats.items():
+                    print(f'{key}: {value}')
+                print('=================================')
 
         return state, reward * self.reward_scaling, terminal, False, info
 
@@ -372,6 +376,13 @@ class PortfolioOptimizationEnv(gym.Env):
         self._portfolio_value = self.initial_amount
 
         return state, {}
+
+    def render(self):
+        if self.is_terminal_state():
+            plot_with_risk_free(self._asset_memory, calculate_periods_per_year(self._df))
+
+    def is_terminal_state(self):
+        return self._time_index >= len(self._sorted_times) - 2
 
     def _get_state_and_info_from_time_index(self, time_index):
         # Определение временного диапазона
