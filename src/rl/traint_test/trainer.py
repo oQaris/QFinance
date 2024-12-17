@@ -2,11 +2,12 @@ import os
 
 import numpy as np
 import pandas as pd
+import torch as th
 from gymnasium.utils.env_checker import check_env
 from pandas import DataFrame
 from sb3_contrib import RecurrentPPO
 from stable_baselines3.common.callbacks import EvalCallback
-from stable_baselines3.common.vec_env import SubprocVecEnv
+from stable_baselines3.common.vec_env import SubprocVecEnv, VecNormalize, DummyVecEnv
 
 from src.rl.callbacks import EnvTerminalStatsLoggingCallback
 from src.rl.envs.continuous_env import PortfolioOptimizationEnv
@@ -81,7 +82,7 @@ def custom_learning_rate_schedule(remaining_progress: float, max_lr: float, min_
     :return: Значение лёрнинг рейта для текущего прогресса.
     """
     progress = 1 - remaining_progress
-    warmup_ratio = 0.01  # Доля времени для разогрева (5% от общего времени)
+    warmup_ratio = 0.05  # Доля времени для разогрева (5% от общего времени)
     cosine_decay_ratio = 0.70  # Доля времени для косинусного спада (70% от общего времени)
 
     if progress < warmup_ratio:
@@ -100,44 +101,48 @@ def train_agent(dataset):
     print('Инициализация среды...')
     train, _ = split(dataset, train_ratio=0.8)
 
-    exp_name = 'PPO_lstm_discrete'
-    total_timesteps = 20_000_000
-    n_validation = 10
+    exp_name = 'PPO_lstm_continuous'
+    total_timesteps = 10_000_000
+    n_validation = 20
     num_train_envs = os.cpu_count()
 
-    env_eval = build_discrete_env(dataset)
+    env_eval = VecNormalize(DummyVecEnv([lambda: build_continuous_env(dataset)]))
     eval_callback = EvalCallback(env_eval, best_model_save_path=f'trained_models/{exp_name}/',
                                  n_eval_episodes=1, eval_freq=round(total_timesteps / (n_validation * num_train_envs)),
                                  deterministic=True, render=True)
     log_callback = EnvTerminalStatsLoggingCallback()
 
-    env_train = SubprocVecEnv([lambda: build_discrete_env(train) for _ in range(num_train_envs)])
+    env_train = SubprocVecEnv([lambda: build_continuous_env(train) for _ in range(num_train_envs)])
+    env_train = VecNormalize(env_train)
 
     learning_rate_schedule = lambda progress: custom_learning_rate_schedule(
-        progress, max_lr=0.001, min_lr=0.001
+        progress, max_lr=3e-4, min_lr=1e-5
     )
 
     action_dim = env_eval.action_space.shape[0]
-    features_dim = 1024
+    features_dim = 2048
     policy_kwargs = dict(
         features_extractor_class=GeGLUFFNNetExtractor,
-        features_extractor_kwargs=dict(features_dim=features_dim),
+        features_extractor_kwargs=dict(features_dim=features_dim, num_blocks=8),
         share_features_extractor=False,
-        net_arch=[round((features_dim - action_dim) / 2)],
+        net_arch=[round((1024 - action_dim) / 2)],
         normalize_images=False,
-        lstm_hidden_size=512,
-        n_lstm_layers=1,
+        lstm_hidden_size=1024,
+        n_lstm_layers=2,
+        activation_fn=th.nn.ReLU,
+        optimizer_class=th.optim.AdamW
     )
 
     agent = RecurrentPPO(
-        # policy=CustomDirichletRecurrentPolicy,
         policy='MlpLstmPolicy',
         policy_kwargs=policy_kwargs,
-        # learning_rate=learning_rate_schedule,
-        # policy_kwargs=dict(features_extractor_class=RNNvsCNNFeaturesExtractor),
+        n_epochs=1,
+        n_steps=512,
+        batch_size=256,
+        ent_coef=0.01,
+        clip_range=0.2,
+        learning_rate=learning_rate_schedule,
         env=env_train,
-        # replay_buffer_class = PrioritizedSequenceReplayBuffer,
-        # buffer_size=500_000,
         verbose=1,
         tensorboard_log='./tensorboard_log/',
         seed=42
@@ -155,6 +160,7 @@ def train_agent(dataset):
         print('Обучение прервано вручную. Сохраняем модель...')
     finally:
         agent.save(f'trained_models/{exp_name}/final_model')
+        env_train.save(f'trained_models/{exp_name}/vec_normalize.pkl')
         print('Модель успешно сохранена.')
 
 

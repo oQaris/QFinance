@@ -71,7 +71,8 @@ class CustomActorCriticPolicy(ActorCriticPolicy):
 class GeGLUFFNNetExtractor(BaseFeaturesExtractor):
     def __init__(self,
                  observation_space: gym.Space,
-                 features_dim: int = 1024) -> None:
+                 features_dim: int = 2048,
+                 num_blocks: int = 8) -> None:
         super().__init__(observation_space, features_dim)
         input_dim = 0
         if observation_space is gym.spaces.Dict:
@@ -81,7 +82,7 @@ class GeGLUFFNNetExtractor(BaseFeaturesExtractor):
             input_dim = get_flattened_obs_dim(observation_space)
         self.flatten = nn.Flatten()
         self.linear = nn.Linear(input_dim, features_dim)
-        self.geglu_ffn_net = GeGLUFFNNetwork(dim=features_dim, num_blocks=5)
+        self.geglu_ffn_net = GeGLUFFNNetwork(dim=features_dim, num_blocks=num_blocks)
 
     def forward(self, observations) -> th.Tensor:
         if type(observations) is dict:

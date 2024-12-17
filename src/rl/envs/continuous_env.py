@@ -32,6 +32,28 @@ def _custom_softmax(x):
     return result
 
 
+def scale_to_unit_sum(arr):
+    """
+    Масштабирует массив NumPy в диапазон [0, 1] так, чтобы сумма элементов была равна 1.
+    Корректно работает с отрицательными значениями и типами float32.
+    """
+    arr = arr.astype(np.float64)  # Приводим к float64 для избежания переполнения
+
+    arr_min = np.min(arr)
+    arr_max = np.max(arr)
+
+    if arr_max == arr_min:  # Если все элементы одинаковы
+        return np.ones_like(arr, dtype=np.float32) / arr.size
+
+    # Линейное масштабирование значений в диапазон [0, 1]
+    scaled = (arr - arr_min) / (arr_max - arr_min)
+
+    # Нормализация так, чтобы сумма была равна 1
+    result = scaled / np.sum(scaled)
+
+    return result.astype(np.float32)  # Возвращаем в исходный тип float32
+
+
 class PortfolioOptimizationEnv(gym.Env):
 
     def __init__(
@@ -49,7 +71,7 @@ class PortfolioOptimizationEnv(gym.Env):
             reward_type='excess_log',
             reward_scaling=10,
             fee_ratio=0.003,
-            transaction_threshold_ratio=0.005,
+            transaction_threshold_ratio=0.01,
             verbose=0,
     ):
         """
@@ -116,7 +138,9 @@ class PortfolioOptimizationEnv(gym.Env):
         self._portfolio_value = self.initial_amount
 
         # Необходимо для OpenAI Gym
-        self.action_space = spaces.Box(low=0, high=1, shape=(self.portfolio_size + 1,), dtype=np.float64)
+        max_float = 1.7 * 10308
+        self.action_space = spaces.Box(low=-max_float, high=max_float, shape=(self.portfolio_size + 1,),
+                                       dtype=np.float64)
         self.observation_space = spaces.Dict({
             'price_data': spaces.Box(
                 low=-np.inf, high=np.inf, shape=(len(self.window_features), self.portfolio_size, self.time_window),
@@ -187,9 +211,9 @@ class PortfolioOptimizationEnv(gym.Env):
             weights = actions / np.sum(actions)
         else:
             # print('_custom_softmax')
-            weights = _custom_softmax(actions)
+            # weights = _custom_softmax(actions)
             # weights = _softmax(actions)
-            # weights = actions / actions.sum()
+            weights = scale_to_unit_sum(actions)
 
         # save initial portfolio weights for this time step
         self._actions_memory.append(weights)
