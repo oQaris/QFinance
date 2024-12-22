@@ -68,7 +68,7 @@ class PortfolioOptimizationEnv(gym.Env):
             tic_column='tic',
             lot_column='lot',
             time_window=64,
-            reward_type='excess_log',
+            reward_type='excess_absolute',
             reward_scaling=10,
             fee_ratio=0.003,
             transaction_threshold_ratio=0.01,
@@ -140,23 +140,23 @@ class PortfolioOptimizationEnv(gym.Env):
         # Необходимо для OpenAI Gym
         max_float = 1.7 * 10308
         self.action_space = spaces.Box(low=-max_float, high=max_float, shape=(self.portfolio_size + 1,),
-                                       dtype=np.float64)
+                                       dtype=np.float32)
         self.observation_space = spaces.Dict({
             'price_data': spaces.Box(
                 low=-np.inf, high=np.inf, shape=(len(self.window_features), self.portfolio_size, self.time_window),
-                dtype=np.float64
+                dtype=np.float32
             ),
             'indicators': spaces.Box(
-                low=-np.inf, high=np.inf, shape=(self.portfolio_size, len(self.indicators_features)), dtype=np.float64
+                low=-np.inf, high=np.inf, shape=(self.portfolio_size, len(self.indicators_features)), dtype=np.float32
             ),
             'common_data': spaces.Box(
-                low=-np.inf, high=np.inf, shape=(len(self.time_features),), dtype=np.float64
+                low=-np.inf, high=np.inf, shape=(len(self.time_features),), dtype=np.float32
             ),
             'portfolio_dist': spaces.Box(
-                low=0, high=1, shape=(self.portfolio_size + 1,), dtype=np.float64
+                low=0, high=1, shape=(self.portfolio_size + 1,), dtype=np.float32
             )
         })
-        self.metadata = {'render_modes': ['human']}
+        self.metadata = {'render_modes': ['human'], 'render_fps': 1}
         self.render_mode = 'human'
         self._reset_memory()
 
@@ -235,7 +235,7 @@ class PortfolioOptimizationEnv(gym.Env):
         # calculate new portfolio value and weights
         self._portfolio_value = np.sum(new_portfolio)
         final_weights = new_portfolio / self._portfolio_value
-        state['portfolio_dist'] = final_weights
+        state['portfolio_dist'] = final_weights.astype(np.float32)
 
         # save final portfolio value and weights of this time step
         self._asset_memory.append(self._portfolio_value)
@@ -451,40 +451,39 @@ class PortfolioOptimizationEnv(gym.Env):
         return state
 
     def _preprocess_data(self):
-        # order time dataframe by tic and time
+        # Сортируем датафрейм по тикерам и времени
         self._df = self._df.sort_values(by=[self.tic_column, self.time_column])
-        # defining price variation after ordering dataframe
+
+        # Определяем изменение цен тикеров с течением времени
         self._df_price_variation = self._temporal_variation_df()[
             [self.tic_column, self.time_column, self.valuation_column]
         ]
         self._mean_temporal_variation = (self._df_price_variation
                                          .groupby(self.time_column)[self.valuation_column]
                                          .mean())
-        # transform str to datetime
+        # Преобразуем даты
         self._df[self.time_column] = pd.to_datetime(self._df[self.time_column])
         self._df_price_variation[self.time_column] = pd.to_datetime(self._df_price_variation[self.time_column])
         self._mean_temporal_variation.index = pd.to_datetime(self._mean_temporal_variation.index)
 
     def _reset_memory(self):
-        # memorize portfolio value each step
         self._asset_memory = [self.initial_amount]
-        # memorize portfolio return and reward each step
         self._portfolio_return_memory = [0]
-        # initial action: all money is allocated in cash
+        # Начальное действие - все деньги в кеше
         self._actions_memory = [
-            np.array([1] + [0] * self.portfolio_size, dtype=np.float32)
+            np.array([1] + [0] * self.portfolio_size, dtype=np.float64)
         ]
-        # memorize portfolio weights at the ending of time step
+        # Для внутренних расчётов используем везде 64 битные типы
+        # кроме весов портфеля, поскольку они участвуют в 32 битном state
         self._final_weights = [
             np.array([1] + [0] * self.portfolio_size, dtype=np.float32)
         ]
         self._portfolio_memory = [
-            np.array([self.initial_amount] + [0] * self.portfolio_size, dtype=np.float32)
+            np.array([self.initial_amount] + [0] * self.portfolio_size, dtype=np.float64)
         ]
         self._tic_counts_memory = [
-            np.array([0] * self.portfolio_size, dtype=np.uint32)
+            np.array([0] * self.portfolio_size, dtype=np.uint64)
         ]
-        # memorize datetimes
         date_time = self._sorted_times[self._time_index]
         self._date_memory = [date_time]
 

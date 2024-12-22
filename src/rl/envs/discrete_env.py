@@ -56,7 +56,7 @@ class StockTradingEnv(gym.Env):
         self.action_space = spaces.Box(low=-1, high=1, shape=(self.stock_dim,), dtype=np.float32)
         state_space = 1 + 2 * self.stock_dim + len(tech_indicator_list) * self.stock_dim
         self.observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=(state_space,), dtype=np.float32)
-        self.metadata = {'render_modes': ['human']}
+        self.metadata = {'render_modes': ['human'], 'render_fps': 1}
         self.render_mode = 'human'
 
         # инициализация состояния
