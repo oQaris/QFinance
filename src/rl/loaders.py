@@ -14,6 +14,10 @@ def get_start_end_dates(dataset):
 
 def split(dataset, train_ratio=0.8, stratification=0):
     dataset = dataset.copy()
+    if 'Unnamed: 0' in dataset.columns:
+        dataset = dataset.drop(columns=['Unnamed: 0'])
+    dataset.reset_index(drop=True, inplace=True)
+
     dates = pd.to_datetime(dataset['date'], format=DATE_FORMAT)
     dataset['day'] = dates.dt.date
 

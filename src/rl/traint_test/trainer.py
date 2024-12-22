@@ -1,4 +1,5 @@
 import os
+import warnings
 
 import numpy as np
 import pandas as pd
@@ -6,14 +7,26 @@ import torch as th
 from gymnasium.utils.env_checker import check_env
 from pandas import DataFrame
 from sb3_contrib import RecurrentPPO
-from stable_baselines3.common.callbacks import EvalCallback
-from stable_baselines3.common.vec_env import SubprocVecEnv, VecNormalize, DummyVecEnv
+from stable_baselines3.common.vec_env import SubprocVecEnv
 
-from src.rl.callbacks import EnvTerminalStatsLoggingCallback
+from src.rl.callbacks import EnvTerminalStatsLoggingCallback, CustomEvalCallback
 from src.rl.envs.continuous_env import PortfolioOptimizationEnv
 from src.rl.envs.discrete_env import StockTradingEnv
 from src.rl.loaders import split
 from src.rl.policy import GeGLUFFNNetExtractor
+
+warnings.filterwarnings("ignore",
+                        message=".*For Box action spaces, we recommend using a symmetric and normalized space (range=[-1, 1] or [0, 1]).*")
+warnings.filterwarnings("ignore",
+                        message=".*A Box observation space has an unconventional shape (neither an image, nor a 1D vector).*")
+warnings.filterwarnings("ignore",
+                        message=".*It seems a Box observation space is an image but the lower and upper bounds are not [0, 255].*")
+warnings.filterwarnings("ignore",
+                        message=".*A Box observation space minimum value is -infinity. This is probably too low.*")
+warnings.filterwarnings("ignore",
+                        message=".*A Box observation space maximum value is -infinity. This is probably too high.*")
+warnings.filterwarnings("ignore",
+                        message=".*Not able to test alternative render modes due to the environment not having a spec.*")
 
 time_window = 1
 initial_amount = 500_000
@@ -24,7 +37,12 @@ subset_tics = None
 
 
 def load_dataset():
-    dataset = pd.read_csv('C:/Users/oQaris/Desktop/Git/QFinance/data/pre/last_top_data_preprocess_norm_time.csv')
+    # todo 2024-01-04_2024-10-04_5_MIN_final
+    dataset = pd.read_csv('../../../data/pre/2018-01-01_2024-12-21_HOUR_final.csv')
+    dataset['lot'] = dataset['lot'].astype('int32')
+    dataset = dataset.astype({col: 'float32'
+                              for col in dataset.select_dtypes(include=['float64']).columns
+                              if col != 'price'})
     return split(dataset, train_ratio=0.8, stratification=time_window)
 
 
@@ -99,49 +117,48 @@ def custom_learning_rate_schedule(remaining_progress: float, max_lr: float, min_
 
 def train_agent(dataset):
     print('Инициализация среды...')
-    train, _ = split(dataset, train_ratio=0.8)
+    train, test = split(dataset, train_ratio=0.8)
 
-    exp_name = 'PPO_lstm_continuous'
+    exp_name = 'PPO_lstm_continuous_exp'
     total_timesteps = 10_000_000
-    n_validation = 20
-    num_train_envs = os.cpu_count()
+    num_train_envs = 1 #todo рассчитать batch для os.cpu_count()
 
-    env_eval = VecNormalize(DummyVecEnv([lambda: build_continuous_env(dataset)]))
-    eval_callback = EvalCallback(env_eval, best_model_save_path=f'trained_models/{exp_name}/',
-                                 n_eval_episodes=1, eval_freq=round(total_timesteps / (n_validation * num_train_envs)),
-                                 deterministic=True, render=True)
+    env_eval = build_continuous_env(test)  # VecNormalize(DummyVecEnv([lambda: build_continuous_env(dataset)]))
+    eval_callback = CustomEvalCallback(env_eval, best_model_save_path=f'trained_models/{exp_name}/',
+                                       n_eval_episodes=1, eval_freq=0,
+                                       deterministic=True, render=True)
     log_callback = EnvTerminalStatsLoggingCallback()
 
     env_train = SubprocVecEnv([lambda: build_continuous_env(train) for _ in range(num_train_envs)])
-    env_train = VecNormalize(env_train)
 
     learning_rate_schedule = lambda progress: custom_learning_rate_schedule(
         progress, max_lr=3e-4, min_lr=1e-5
     )
 
     action_dim = env_eval.action_space.shape[0]
-    features_dim = 2048
+    features_dim = 1024
+    lstm_hidden = int(features_dim / 2)
     policy_kwargs = dict(
         features_extractor_class=GeGLUFFNNetExtractor,
-        features_extractor_kwargs=dict(features_dim=features_dim, num_blocks=8),
+        features_extractor_kwargs=dict(features_dim=features_dim, num_blocks=8, dropout=0.5),
         share_features_extractor=False,
-        net_arch=[round((1024 - action_dim) / 2)],
+        net_arch=[round((lstm_hidden - action_dim) / 2)],
         normalize_images=False,
-        lstm_hidden_size=1024,
+        lstm_hidden_size=lstm_hidden,
         n_lstm_layers=2,
-        activation_fn=th.nn.ReLU,
+        lstm_kwargs=dict(dropout=0.3),
+        activation_fn=th.nn.Identity,
         optimizer_class=th.optim.AdamW
     )
 
+    batch = int(512 / num_train_envs)
     agent = RecurrentPPO(
         policy='MlpLstmPolicy',
         policy_kwargs=policy_kwargs,
         n_epochs=1,
-        n_steps=512,
-        batch_size=256,
-        ent_coef=0.01,
-        clip_range=0.2,
-        learning_rate=learning_rate_schedule,
+        n_steps=batch,
+        batch_size=batch,
+        learning_rate=1e-4,
         env=env_train,
         verbose=1,
         tensorboard_log='./tensorboard_log/',
@@ -160,12 +177,9 @@ def train_agent(dataset):
         print('Обучение прервано вручную. Сохраняем модель...')
     finally:
         agent.save(f'trained_models/{exp_name}/final_model')
-        env_train.save(f'trained_models/{exp_name}/vec_normalize.pkl')
         print('Модель успешно сохранена.')
 
 
 if __name__ == '__main__':
     train_df, _ = load_dataset()
-    # env_train = build_env(train, verbose=1)
-    # env_train = build_discrete_env(train, verbose=1)
     train_agent(train_df)
