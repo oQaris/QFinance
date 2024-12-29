@@ -41,19 +41,35 @@ def calculate_periods_per_year(df):
     return sum(periods_list) / len(periods_list)
 
 
-# Функция для добавления безубыточного актива на график
-def plot_with_risk_free(portfolio, n_periods_per_year, rf_rate=yearly_risk_free_rate):
+def calculate_equal_weight_portfolio(initial_amount, mean_temporal_variation):
+    """
+    Рассчитывает стоимость портфеля с равномерным распределением акций.
+    """
+    equal_weight_portfolio = [initial_amount]
+
+    for variation in mean_temporal_variation[1:-1]:
+        equal_weight_portfolio.append(equal_weight_portfolio[-1] * variation)
+
+    return equal_weight_portfolio
+
+
+def plot_with_risk_free(portfolio, n_periods_per_year, rf_rate=yearly_risk_free_rate, equal_weight_portfolio=None):
+    """
+    Рисует график с кривыми стратегии, безубыточного актива и равномерного распределенного портфеля.
+    """
     len_trade = len(portfolio)
     daily_rf_rate = (1 + rf_rate) ** (1 / n_periods_per_year) - 1
     risk_free_portfolio = portfolio[0] * (1 + daily_rf_rate) ** np.arange(len_trade)
 
     plt.figure(figsize=(12, 6))
-    plt.plot(portfolio, label="Стратегия",
-             color="green")
-    plt.plot(risk_free_portfolio, label=f"Безубыточный актив ({rf_rate * 100:.2f}% годовых)",
-             color="blue", linestyle="--")
+    plt.plot(portfolio, label="Стратегия", color="green")
+    plt.plot(risk_free_portfolio, label=f"Безубыточный актив ({rf_rate * 100:.2f}% годовых)", color="blue",
+             linestyle="--")
 
-    plt.title(f"Изменение размера портфеля", fontsize=16)
+    if equal_weight_portfolio is not None:
+        plt.plot(equal_weight_portfolio, label="Равномерно распределенный портфель", color="orange", linestyle=":")
+
+    plt.title("Изменение размера портфеля", fontsize=16)
     plt.xlabel("Периоды", fontsize=14)
     plt.ylabel("Размер портфеля", fontsize=14)
     plt.legend(fontsize=12)
