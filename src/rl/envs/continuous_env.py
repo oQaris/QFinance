@@ -164,12 +164,17 @@ class PortfolioOptimizationEnv(gym.Env):
         return self._time_index >= len(self._sorted_times) - 3
 
     def get_terminal_stats(self):
+        # Преобразуем данные в DataFrame
         metrics_df = pd.DataFrame({
             'date': self._date_memory,
             'returns': self._portfolio_return_memory,
             'portfolio_values': self._asset_memory,
             'tic_counts': self._tic_counts_memory
         })
+
+        # Убедимся, что дата является DatetimeIndex
+        metrics_df['date'] = pd.to_datetime(metrics_df['date'])
+        metrics_df.set_index('date', inplace=True)
 
         # Считаем среднее число транзакций без учёта первых покупок
         final_num_transactions = self.num_of_transactions - np.count_nonzero(self._tic_counts_memory[0])

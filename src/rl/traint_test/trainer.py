@@ -39,6 +39,7 @@ subset_tics = None
 def load_dataset():
     # todo 2024-01-04_2024-10-04_5_MIN_final
     dataset = pd.read_csv('../../../data/pre/2018-01-01_2024-12-21_HOUR_final.csv')
+    dataset['date'] = pd.to_datetime(dataset['date'])
     dataset['lot'] = dataset['lot'].astype('int32')
     dataset = dataset.astype({col: 'float32'
                               for col in dataset.select_dtypes(include=['float64']).columns

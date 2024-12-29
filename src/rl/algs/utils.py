@@ -8,8 +8,19 @@ yearly_risk_free_rate = 0.2268
 
 
 def sharpe_sortino(df):
-    # Вычисляем среднюю разницу между датами
-    avg_diff = pd.to_datetime(df['date']).diff().dropna().mean()
+    """
+    Вычисляет коэффициенты Sharpe и Sortino на основе данных DataFrame.
+
+    :param df: DataFrame с колонкой 'returns' и датами.
+    :return: Кортеж из Sharpe и Sortino коэффициентов.
+    """
+    # Преобразуем датафрейм таким образом, чтобы индексом была дата
+    df = df.copy().reset_index()
+    date_column = find_date_column(df)
+    df = df.set_index(date_column)
+
+    # Вычисляем среднюю разницу между индексами (даты)
+    avg_diff = df.index.to_series().diff().dropna().mean()
     # Рассчитываем количество периодов в году, учитывая високосные
     periods_per_year = pd.Timedelta(days=365.25) / avg_diff
     args = {
@@ -22,6 +33,24 @@ def sharpe_sortino(df):
     sortino_ratio = qs.stats.sortino(df['returns'], **args)
     return sharpe_ratio, sortino_ratio
 
+
+def find_date_column(df):
+    """
+    Находит столбец с датами в DataFrame. Не проверяет индекс,
+    если необходимо его учитывать, то сбросьте индекс: `df.reset_index()`
+
+    :param df: DataFrame для анализа.
+    :return: Название столбца с датами.
+    """
+    date_columns = [col for col in df.columns
+                    if pd.api.types.is_datetime64_any_dtype(df[col])]
+
+    if len(date_columns) > 1:
+        raise ValueError(f"Обнаружено несколько столбцов с датами: {date_columns}")
+    elif not date_columns:
+        raise ValueError("Не найдено столбцов с датами или дат в индексе.")
+
+    return date_columns[0]
 
 def calculate_periods_per_year(df):
     tickers = df['tic'].unique()
