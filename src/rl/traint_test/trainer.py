@@ -1,4 +1,3 @@
-import os
 import warnings
 
 import numpy as np
@@ -6,6 +5,7 @@ import pandas as pd
 import torch as th
 from gymnasium.utils.env_checker import check_env
 from pandas import DataFrame
+from stable_baselines3 import SAC
 from sb3_contrib import RecurrentPPO
 from stable_baselines3.common.vec_env import SubprocVecEnv
 
@@ -115,21 +115,23 @@ def custom_learning_rate_schedule(remaining_progress: float, max_lr: float, min_
         return min_lr
 
 
-def train_agent(dataset):
+def train_agent(train, test):
     print('Инициализация среды...')
-    train, test = split(dataset, train_ratio=0.8)
 
-    exp_name = 'PPO_lstm_continuous_exp'
+    exp_name = 'SAC_lstm_continuous_exp'
     total_timesteps = 10_000_000
     num_train_envs = 1 #todo рассчитать batch для os.cpu_count()
 
-    env_eval = build_continuous_env(test)  # VecNormalize(DummyVecEnv([lambda: build_continuous_env(dataset)]))
+    env_eval = build_continuous_env(test)
+    # VecNormalize(DummyVecEnv([lambda: build_continuous_env(dataset)]))
+
     eval_callback = CustomEvalCallback(env_eval, best_model_save_path=f'trained_models/{exp_name}/',
-                                       n_eval_episodes=1, eval_freq=0,
+                                       n_eval_episodes=1,
                                        deterministic=True, render=True)
     log_callback = EnvTerminalStatsLoggingCallback()
 
-    env_train = SubprocVecEnv([lambda: build_continuous_env(train) for _ in range(num_train_envs)])
+    env_train = build_continuous_env(train)
+    # SubprocVecEnv([lambda: build_continuous_env(train) for _ in range(num_train_envs)])
 
     learning_rate_schedule = lambda progress: custom_learning_rate_schedule(
         progress, max_lr=3e-4, min_lr=1e-5
@@ -141,24 +143,24 @@ def train_agent(dataset):
     policy_kwargs = dict(
         features_extractor_class=GeGLUFFNNetExtractor,
         features_extractor_kwargs=dict(features_dim=features_dim, num_blocks=8, dropout=0.5),
-        share_features_extractor=False,
         net_arch=[round((lstm_hidden - action_dim) / 2)],
+        share_features_extractor=False,
         normalize_images=False,
-        lstm_hidden_size=lstm_hidden,
-        n_lstm_layers=2,
-        lstm_kwargs=dict(dropout=0.3),
+        # lstm_hidden_size=lstm_hidden,
+        # n_lstm_layers=2,
+        # lstm_kwargs=dict(dropout=0.3),
         activation_fn=th.nn.Identity,
         optimizer_class=th.optim.AdamW
     )
 
     batch = int(512 / num_train_envs)
-    agent = RecurrentPPO(
-        policy='MlpLstmPolicy',
+    agent = SAC(
+        policy='MultiInputPolicy',
         policy_kwargs=policy_kwargs,
-        n_epochs=1,
-        n_steps=batch,
+        # n_epochs=1,
+        # n_steps=batch,
         batch_size=batch,
-        learning_rate=1e-4,
+        learning_rate=1e-5,
         env=env_train,
         verbose=1,
         tensorboard_log='./tensorboard_log/',
@@ -181,5 +183,4 @@ def train_agent(dataset):
 
 
 if __name__ == '__main__':
-    train_df, _ = load_dataset()
-    train_agent(train_df)
+    train_agent(*load_dataset())

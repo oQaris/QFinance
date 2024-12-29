@@ -1,4 +1,5 @@
 import os
+import pickle
 from typing import List, Dict, Any, Union, Optional, Tuple, Callable
 
 import gymnasium as gym
@@ -6,8 +7,38 @@ import numpy as np
 from sb3_contrib import RecurrentPPO
 from sb3_contrib.common.recurrent.type_aliases import RNNStates
 from stable_baselines3.common.callbacks import BaseCallback, EventCallback
+from stable_baselines3.common.evaluation import evaluate_policy
 from stable_baselines3.common.vec_env import DummyVecEnv
 from stable_baselines3.common.vec_env import VecEnv, sync_envs_normalization
+
+
+def log_terminal_stats(locals_dict, logger, marker='env'):
+    dones = locals_dict.get('dones', [])
+    infos = locals_dict.get('infos', [])
+
+    if not all(dones):
+        if any(dones):
+            raise ValueError('Episode lengths should be the same in all training environments')
+        return True
+
+    aggregated_stats = {}
+
+    for info in infos:
+        terminal_stats = info.get('terminal_stats', None)
+        if terminal_stats is None:
+            raise ValueError('"terminal_stats" does not exist in environment information')
+
+        # Суммируем значения для каждого ключа
+        for key, value in terminal_stats.items():
+            if key not in aggregated_stats:
+                aggregated_stats[key] = 0
+            aggregated_stats[key] += value
+
+    # Вычисляем средние значения и записываем в логгер
+    num_envs = len(infos)
+    for key, total_value in aggregated_stats.items():
+        mean_value = total_value / num_envs
+        logger.record(f'{marker}/{key}', mean_value)
 
 
 class EnvTerminalStatsLoggingCallback(BaseCallback):
@@ -15,33 +46,7 @@ class EnvTerminalStatsLoggingCallback(BaseCallback):
         super(EnvTerminalStatsLoggingCallback, self).__init__(verbose)
 
     def _on_step(self):
-        dones = self.locals.get('dones', [])
-        infos = self.locals.get('infos', [])
-
-        if not all(dones):
-            if any(dones):
-                raise ValueError('Episode lengths should be the same in all training environments')
-            return True
-
-        aggregated_stats = {}
-
-        for info in infos:
-            terminal_stats = info.get('terminal_stats', None)
-            if terminal_stats is None:
-                raise ValueError('"terminal_stats" does not exist in environment information')
-
-            # Суммируем значения для каждого ключа
-            for key, value in terminal_stats.items():
-                if key not in aggregated_stats:
-                    aggregated_stats[key] = 0
-                aggregated_stats[key] += value
-
-        # Вычисляем средние значения и записываем в логгер
-        num_envs = len(infos)
-        for key, total_value in aggregated_stats.items():
-            mean_value = total_value / num_envs
-            self.logger.record(f'env/{key}', mean_value)
-
+        log_terminal_stats(self.locals, self.logger, marker='env_train')
         return True
 
 
@@ -51,8 +56,7 @@ class CustomEvalCallback(EventCallback):
             eval_env: Union[gym.Env, VecEnv],
             callback_on_new_best: Optional[BaseCallback] = None,
             callback_after_eval: Optional[BaseCallback] = None,
-            n_eval_episodes: int = 5,
-            eval_freq: int = 10000,
+            n_eval_episodes: int = 1,
             log_path: Optional[str] = None,
             best_model_save_path: Optional[str] = None,
             deterministic: bool = True,
@@ -68,7 +72,6 @@ class CustomEvalCallback(EventCallback):
             self.callback_on_new_best.parent = self
 
         self.n_eval_episodes = n_eval_episodes
-        self.eval_freq = eval_freq
         self.best_mean_reward = -np.inf
         self.last_mean_reward = -np.inf
         self.deterministic = deterministic
@@ -91,10 +94,11 @@ class CustomEvalCallback(EventCallback):
         # For computing success rate
         self._is_success_buffer: List[bool] = []
         self.evaluations_successes: List[List[bool]] = []
+        self.is_recurrent: bool = False
 
     def _init_callback(self) -> None:
-        if not isinstance(self.model, RecurrentPPO):
-            raise ValueError('Evaluation model must be RecurrentPPO')
+        self.is_recurrent = isinstance(self.model, RecurrentPPO)
+
         # Create folders if needed
         if self.best_model_save_path is not None:
             os.makedirs(self.best_model_save_path, exist_ok=True)
@@ -105,42 +109,13 @@ class CustomEvalCallback(EventCallback):
         if self.callback_on_new_best is not None:
             self.callback_on_new_best.init_callback(self.model)
 
-    def _log_success_callback(self, locals_: Dict[str, Any], globals_: Dict[str, Any]) -> None:
+    def _log_success_callback(self, locals_: Dict[str, Any]) -> None:
         """
         Callback passed to the  ``evaluate_policy`` function
         in order to log the success rate (when applicable),
         for instance when using HER.
-
-        :param locals_:
-        :param globals_:
         """
-        #todo универсализировать с EnvTerminalStatsLoggingCallback
-        infos = locals_['infos']
-        dones = locals_['dones']
-
-        if not all(dones):
-            if any(dones):
-                raise ValueError('Episode lengths should be the same in all training environments')
-            return
-
-        aggregated_stats = {}
-
-        for info in infos:
-            terminal_stats = info.get('terminal_stats', None)
-            if terminal_stats is None:
-                raise ValueError('"terminal_stats" does not exist in environment information')
-
-            # Суммируем значения для каждого ключа
-            for key, value in terminal_stats.items():
-                if key not in aggregated_stats:
-                    aggregated_stats[key] = 0
-                aggregated_stats[key] += value
-
-        # Вычисляем средние значения и записываем в логгер
-        num_envs = len(infos)
-        for key, total_value in aggregated_stats.items():
-            mean_value = total_value / num_envs
-            self.logger.record(f'env_test/{key}', mean_value)
+        log_terminal_stats(locals_, self.logger, marker='env_test')
 
         if locals_['done']:
             maybe_is_success = locals_['info'].get('is_success')
@@ -149,7 +124,7 @@ class CustomEvalCallback(EventCallback):
 
     def _on_step(self) -> bool:
         dones = self.locals.get('dones', [])
-        if not all(dones):
+        if not all(dones) and self.n_calls != 1:
             if any(dones):
                 raise ValueError('Episode lengths should be the same in all training environments')
             return True
@@ -168,17 +143,29 @@ class CustomEvalCallback(EventCallback):
         # Reset success rate buffer
         self._is_success_buffer = []
 
-        episode_rewards, episode_lengths = recurrent_evaluate_policy(
-            self.model,  # type: ignore
-            self.eval_env,
-            self.model._last_lstm_states.pi,  # type: ignore
-            n_eval_episodes=self.n_eval_episodes,
-            render=self.render,
-            deterministic=self.deterministic,
-            return_episode_rewards=True,
-            warn=self.warn,
-            callback=self._log_success_callback,
-        )
+        if self.is_recurrent:
+            episode_rewards, episode_lengths = recurrent_evaluate_policy(
+                self.model,  # type: ignore
+                self.eval_env,
+                self.model._last_lstm_states.pi,  # type: ignore
+                n_eval_episodes=self.n_eval_episodes,
+                render=self.render,
+                deterministic=self.deterministic,
+                return_episode_rewards=True,
+                warn=self.warn,
+                callback=self._log_success_callback,
+            )
+        else:
+            episode_rewards, episode_lengths = evaluate_policy(
+                self.model,  # type: ignore
+                self.eval_env,
+                n_eval_episodes=self.n_eval_episodes,
+                render=self.render,
+                deterministic=self.deterministic,
+                return_episode_rewards=True,
+                warn=self.warn,
+                callback=lambda l, g: self._log_success_callback(l),
+            )
 
         if self.log_path is not None:
             assert isinstance(episode_rewards, list)
@@ -228,6 +215,9 @@ class CustomEvalCallback(EventCallback):
                 print(f'New best mean reward!')
             if self.best_model_save_path is not None:
                 self.model.save(os.path.join(self.best_model_save_path, 'best_model'))
+                if self.is_recurrent:
+                    with open(os.path.join(self.best_model_save_path, 'best_lstm_states'), "wb") as fp:
+                        pickle.dump(self.model._last_lstm_states, fp)
             self.best_mean_reward = float(mean_reward)
 
         return True
@@ -249,7 +239,7 @@ def recurrent_evaluate_policy(
         n_eval_episodes: int = 10,
         deterministic: bool = True,
         render: bool = False,
-        callback: Optional[Callable[[Dict[str, Any], Dict[str, Any]], None]] = None,
+        callback: Optional[Callable[[Dict[str, Any]], None]] = None,
         reward_threshold: Optional[float] = None,
         return_episode_rewards: bool = False,
         warn: bool = True,
@@ -293,7 +283,7 @@ def recurrent_evaluate_policy(
                 episode_starts[i] = done
 
                 if callback is not None:
-                    callback(locals(), globals())
+                    callback(locals())
 
                 if dones[i]:
                     episode_rewards.append(current_rewards[i])

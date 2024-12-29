@@ -11,7 +11,7 @@ from gymnasium import spaces
 
 from src.rl.algs import utils
 from src.rl.algs.distributor import discrete_allocation_custom, minimize_transactions
-from src.rl.algs.utils import plot_with_risk_free, calculate_periods_per_year
+from src.rl.algs.utils import plot_with_risk_free, calculate_periods_per_year, calculate_equal_weight_portfolio
 
 
 def _softmax(x):
@@ -403,7 +403,9 @@ class PortfolioOptimizationEnv(gym.Env):
 
     def render(self):
         if self.is_terminal_state():
-            plot_with_risk_free(self._asset_memory, calculate_periods_per_year(self._df))
+            mean_portfolio = calculate_equal_weight_portfolio(self.initial_amount, self._mean_temporal_variation)
+            plot_with_risk_free(self._asset_memory, calculate_periods_per_year(self._df),
+                                equal_weight_portfolio=mean_portfolio)
 
     def is_terminal_state(self):
         return self._time_index >= len(self._sorted_times) - 2

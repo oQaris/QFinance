@@ -33,7 +33,9 @@ def normalize_with_stats(data, stats=None, exclude=('lot', 'price')):
 
     # Выбор столбцов для логарифмической нормализации на основе близкого максимального значения
     max_close = df['price'].max()
-    log_cols = [col for col in numeric_cols if df[col].min() >= 0 and df[col].max() > max_close * 0.9]
+    log_cols = [col for col in numeric_cols
+                if df[col].min() >= 0
+                and df[col].max() > max_close * 0.9]
     stats['log_cols'] = log_cols
 
     for col in log_cols:
