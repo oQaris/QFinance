@@ -18,7 +18,7 @@ QFinance — проект, посвящённый разработке и при
 - https://arxiv.org/abs/1706.10059
 - https://github.com/AI4Finance-Foundation/FinRL
 
-Шаги реализации
+### Шаги реализации
 
 - [x] Выгрузка данных Мосбиржи с использованием [Tinkoff Invest API](https://www.tbank.ru/invest/open-api/)
 - [x] Расширение котировок техническими индикаторами (см. [StockStats](https://github.com/jealous/stockstats))
@@ -29,3 +29,26 @@ QFinance — проект, посвящённый разработке и при
 - [ ] Оптимизация гиперпараметров модели
 - [ ] Бэктест на брокерском счёте-песочнице
 - [ ] Создание обвязки в виде Телеграмм бота с уведомлениями о сделках
+
+### Установка
+
+``` bash
+conda update conda
+conda create -n sb3 python=3.12
+conda activate sb3
+python -m pip install --upgrade pip
+pip install -r ./requirements.txt
+```
+
+#### Загрузка и предобработка данных
+
+1) Добавьте переменную окружения `TOKEN` со значением токена для песочницы,
+который можно создать здесь - https://www.tbank.ru/invest/settings/api/
+2) Настройте переменные `start_date`, `end_date` и `time_interval`
+в файле ***src/data_engine/pipeline.py***
+3) Выполните `python pipeline.py`, результаты появятся в директории ***data/pre***
+
+#### Обучение модели
+
+1) Отредактируйте путь до датасета в `src.rl.traint_test.trainer.load_dataset`
+2) Выполните `python trainer.py`, результаты появятся в ***src/rl/traint_test/trained_models***

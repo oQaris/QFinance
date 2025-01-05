@@ -1,27 +1,17 @@
-# Используйте Python 3.12
-# Установка PyTorch с CUDA из специфичного индекса
 --extra-index-url https://download.pytorch.org/whl/cu124
-torch
-torchvision
-torchaudio
-
-# Остальные зависимости
-numpy
-pandas
 gymnasium
-quantstats
-line-profiler
-stable-baselines3
-sb3-contrib
-tqdm
-gym
-typing-extensions
-matplotlib
-tinkoff
-stockstats
-beautifulsoup4
-selenium
-PyPortfolioOpt
 ipython
-tensorboard
+line-profiler
+pyportfolioopt
+quantstats
 rich
+sb3-contrib
+scikit-learn
+selenium
+stockstats
+tensorboard
+tinkoff-investments
+torch
+torchaudio
+torchvision
+tqdm
