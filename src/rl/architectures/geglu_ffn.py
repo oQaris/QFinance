@@ -1,4 +1,5 @@
 import torch.nn as nn
+import torch.nn.init as init
 
 
 class GeGLUFFN(nn.Module):
@@ -7,6 +8,7 @@ class GeGLUFFN(nn.Module):
         GeGLUFFN блок.
         Args:
             dim (int): Размерность входного тензора.
+            hidden (int): Размерность скрытого состояния.
             activation (nn.Module): Тип активации ('gelu' по умолчанию).
         """
         super(GeGLUFFN, self).__init__()
@@ -55,6 +57,8 @@ class GeGLUFFNNetwork(nn.Module):
         Args:
             dim (int): Размерность входного тензора.
             num_blocks (int): Количество блоков.
+            dropout (float): Параметр Dropout.
+            hidden_ratio (float): Соотношение между размерностью скрытого состояния и входного.
         """
         super(GeGLUFFNNetwork, self).__init__()
         hidden = round(dim * hidden_ratio)
@@ -62,6 +66,15 @@ class GeGLUFFNNetwork(nn.Module):
             Block(dim, hidden, dropout) for _ in range(num_blocks)
         ])
         self.layer_norm_out = nn.LayerNorm(dim)
+        self.init_weights()
+
+    def init_weights(self):
+        for block in self.blocks:
+            for module in block.modules():
+                if isinstance(module, nn.Linear):
+                    # Kaiming Uniform для всех линейных слоев
+                    init.kaiming_uniform_(module.weight)
+                    init.zeros_(module.bias)
 
     def forward(self, x):
         for block in self.blocks:
