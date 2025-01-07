@@ -103,10 +103,11 @@ class PortfolioOptimizationEnv(gym.Env):
             1 — информационные сообщения,
             2 — отладочные сообщения
         """
-        self.commission_paid = 0
+        self.commission_paid = 0.0
         self.num_of_transactions = 0
         self.time_window = time_window
-        self._time_index = time_window - 1
+        # time_index must start a little bit in the future to implement lookback
+        self.time_index = time_window - 1
 
         self.valuation_column = valuation_column
         self.time_column = time_column
@@ -136,7 +137,7 @@ class PortfolioOptimizationEnv(gym.Env):
         self._sorted_times = sorted(set(self._df[time_column]))
         self.episode_length = len(self._sorted_times) - time_window + 1
 
-        self._portfolio_value = self.initial_amount
+        self.portfolio_value = self.initial_amount
 
         # Необходимо для OpenAI Gym
         max_float = 1.7 * 10308
@@ -160,9 +161,6 @@ class PortfolioOptimizationEnv(gym.Env):
         self.metadata = {'render_modes': ['human'], 'render_fps': 1}
         self.render_mode = 'human'
         self._reset_memory()
-
-    def is_pred_terminal_state(self):
-        return self._time_index >= len(self._sorted_times) - 3
 
     def get_terminal_stats(self):
         # Преобразуем данные в DataFrame
@@ -211,9 +209,6 @@ class PortfolioOptimizationEnv(gym.Env):
         terminal = self.is_terminal_state()
         info = {}
 
-        # transform action to numpy array (if it's a list)
-        # actions = np.array(actions, dtype=np.float32)
-
         # if necessary, normalize weights
         if np.abs(np.sum(actions) - 1) < 1e-4 and np.min(actions) >= 0:
             weights = actions / np.sum(actions)
@@ -227,42 +222,36 @@ class PortfolioOptimizationEnv(gym.Env):
         self._actions_memory.append(weights)
 
         # get last step final weights and portfolio_value
-        current_portfolio, fee = self._rebalance_portfolio(weights)  # portfolio = weights * self._portfolio_value
-        self.commission_paid += fee
-        self._portfolio_value = current_portfolio.sum()
+        current_portfolio = self._rebalance_portfolio(weights)  # portfolio = weights * self.portfolio_value
+        self.portfolio_value = current_portfolio.sum()
 
-        # load next state
-        self._time_index += 1
-        # calc _price_variation
-        state = self._get_state_and_info_from_time_index(self._time_index)
+        # Переход к следующему состоянию
+        self.time_index += 1
+        # Тут вычисляется также `self._price_variation`
+        state = self._get_state_and_info_from_time_index(self.time_index)
 
-        # time passes and time variation changes the portfolio distribution
+        # Новое распределение портфеля с учётом изменённой цены (ребалансировка не нужна, т.к. веса уже согласованны)
         new_portfolio = current_portfolio * self._price_variation
         self._portfolio_memory.append(new_portfolio)
 
-        # calculate new portfolio value and weights
-        self._portfolio_value = np.sum(new_portfolio)
-        final_weights = new_portfolio / self._portfolio_value
+        # Расчёт новой стоимости и весов портфеля
+        self.portfolio_value = np.sum(new_portfolio)
+        final_weights = new_portfolio / self.portfolio_value
         state['portfolio_dist'] = final_weights.astype(np.float32)
 
-        # save final portfolio value and weights of this time step
-        self._asset_memory.append(self._portfolio_value)
+        # Сохранение в памяти
+        self._asset_memory.append(self.portfolio_value)
         self._final_weights.append(final_weights)
-
-        # save date memory
-        end_time = self._sorted_times[self._time_index]
+        end_time = self._sorted_times[self.time_index]
         self._date_memory.append(end_time)
 
-        # define portfolio return
+        # Определяем доходность действия
         rate_of_return = self._asset_memory[-1] / self._asset_memory[-2]
         portfolio_return = rate_of_return - 1
-        rate_of_mean_return = self._mean_temporal_variation[self._sorted_times[self._time_index]]
+        self._portfolio_return_memory.append(portfolio_return)
+        rate_of_mean_return = self._mean_temporal_variation[self._sorted_times[self.time_index]]
         mean_return = rate_of_mean_return - 1
 
-        # save portfolio return memory
-        self._portfolio_return_memory.append(portfolio_return)
-
-        # define reward
         if self.reward_type == 'return_absolute':
             # Процентная доходность
             reward = portfolio_return
@@ -289,7 +278,7 @@ class PortfolioOptimizationEnv(gym.Env):
             if self.verbose >= 1:
                 print('\n=================================')
                 print(f'Initial portfolio value:{self.initial_amount}')
-                print(f'Final portfolio value: {self._portfolio_value}')
+                print(f'Final portfolio value: {self.portfolio_value}')
                 for key, value in terminal_stats.items():
                     print(f'{key}: {value}')
                 print('=================================')
@@ -299,7 +288,7 @@ class PortfolioOptimizationEnv(gym.Env):
     def eval_trades(self, rest_cash):
         tic_counts = self._tic_counts_memory[-1]
         diff_tic_counts = tic_counts - self._tic_counts_memory[-2]
-        date = self._sorted_times[self._time_index]
+        date = self._sorted_times[self.time_index]
         transactions = np.nonzero(diff_tic_counts)[0]
         tics = self._df['tic'].unique()
         for idx in transactions:
@@ -324,7 +313,7 @@ class PortfolioOptimizationEnv(gym.Env):
         :param weights: одномерный массив NumPy, где 0-й элемент — это доля денежных средств,
                         а остальные элементы — это доля по каждой акции.
 
-        :return: Новая распределённая стоимость портфеля (на основе self._portfolio_value) + уже учтённая в нём комиссия
+        :return: Новая распределённая стоимость портфеля (на основе self.portfolio_value) + уже учтённая в нём комиссия
         """
         wsum = weights.sum()
         if abs(wsum - 1) > 1e-5:
@@ -332,7 +321,7 @@ class PortfolioOptimizationEnv(gym.Env):
             weights /= wsum
 
         data_slice = self._df[
-            (self._df[self.time_column] == self._sorted_times[self._time_index])
+            (self._df[self.time_column] == self._sorted_times[self.time_index])
         ].set_index('tic')
 
         # В начале - денежные средства
@@ -365,9 +354,9 @@ class PortfolioOptimizationEnv(gym.Env):
 
     def _allocate_with_fee(self, price, weights, multipliers, reserved):
         tic_price = price[1:]
-        value_before = self._portfolio_value
+        value_before = self.portfolio_value
 
-        to_distribute = self._portfolio_value - reserved
+        to_distribute = self.portfolio_value - reserved
         real_values = discrete_allocation_custom(weights, multipliers, to_distribute)
         sum_allocation = real_values.sum()
         if sum_allocation > to_distribute:
@@ -380,9 +369,9 @@ class PortfolioOptimizationEnv(gym.Env):
         tic_counts = np.array([int(np.round(x)) for x in (real_values[1:] / tic_price)])
         diff_tic_counts = tic_counts - self._tic_counts_memory[-1]
 
-        # Откатываем незначительные транзакции (менее 0.5% портфеля) для минимизации комиссии и стабилизации агента
+        # Откатываем незначительные транзакции (менее x% портфеля) для минимизации комиссии и стабилизации агента
         threshold = real_values.sum() * self.transaction_threshold_ratio
-        new_diff_tic_counts = minimize_transactions(tic_price, diff_tic_counts, threshold, real_values[0])
+        new_diff_tic_counts = minimize_transactions(tic_price, diff_tic_counts, threshold, real_values[0].item())
         new_tic_counts = self._tic_counts_memory[-1] + new_diff_tic_counts
         new_real_values = tic_price * new_tic_counts
         if new_real_values.sum() > value_before:
@@ -400,14 +389,13 @@ class PortfolioOptimizationEnv(gym.Env):
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
-        self.commission_paid = 0
+        self.commission_paid = 0.0
         self.num_of_transactions = 0
-        # time_index must start a little bit in the future to implement lookback
-        self._time_index = self.time_window - 1
+        self.time_index = self.time_window - 1
         self._reset_memory()
 
-        state = self._get_state_and_info_from_time_index(self._time_index)
-        self._portfolio_value = self.initial_amount
+        state = self._get_state_and_info_from_time_index(self.time_index)
+        self.portfolio_value = self.initial_amount
 
         return state, {}
 
@@ -418,7 +406,7 @@ class PortfolioOptimizationEnv(gym.Env):
                                 equal_weight_portfolio=mean_portfolio)
 
     def is_terminal_state(self):
-        return self._time_index >= len(self._sorted_times) - 2
+        return self.time_index >= len(self._sorted_times) - 2
 
     def _get_state_and_info_from_time_index(self, time_index):
         # Определение временного диапазона
@@ -497,7 +485,7 @@ class PortfolioOptimizationEnv(gym.Env):
         self._tic_counts_memory = [
             np.array([0] * self.portfolio_size, dtype=np.uint64)
         ]
-        date_time = self._sorted_times[self._time_index]
+        date_time = self._sorted_times[self.time_index]
         self._date_memory = [date_time]
 
     def _temporal_variation_df(self, periods=1):
