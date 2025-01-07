@@ -1,94 +1,90 @@
-from typing import Callable
+from typing import Optional
 
 import matplotlib.pyplot as plt
 import numpy as np
-import pandas as pd
-import torch
+from stable_baselines3.common.base_class import BaseAlgorithm
 
-from src.rl.algs.mvo import modern_portfolio_theory, top_stocks
-from src.rl.envs.continuous_env import PortfolioOptimizationEnv
+from src.rl.algs.mvo import top_stocks, modern_portfolio_theory
+from src.rl.envs.base_env import BaseEnv
 from src.rl.loaders import get_start_end_dates
-from src.rl.models import PolicyGradient
-from src.rl.nets_zoo import EI3
-from src.rl.traint_test.trainer import load_dataset, build_env, time_window
+from src.rl.traint_test.env_builder import load_datasets, build_continuous_env, time_window
+from src.rl.traint_test.trainer import agent_class, exp_name
 
 
-def validation(predict_fn: Callable[[pd.DataFrame], np.ndarray], env: PortfolioOptimizationEnv):
-    test_obs, _ = env.reset()
+def validation(model: BaseAlgorithm,
+               lstm_states_start: Optional[tuple[np.ndarray, ...]],
+               env: BaseEnv) -> tuple[list[float], Optional[tuple[np.ndarray, ...]]]:
+    obs, _ = env.reset()
+    lstm_states = lstm_states_start
+    episode_starts = np.ones((1,), dtype=bool)
     while True:
-        action = predict_fn(test_obs)
-        test_obs, _, dones, _, _ = env.step(action)
+        action, lstm_states = model.predict(obs,
+                                            state=lstm_states,
+                                            episode_start=episode_starts,
+                                            deterministic=True)
+        obs, _, done, _, _ = env.step(action)
+        episode_starts[0] = done
+        if done:
+            break
+        env.render()
+    return env.get_portfolio_size_history(), lstm_states
+
+
+def validation_hold(first_action: np.ndarray, env: BaseEnv):
+    old_ttr = env.transaction_threshold_ratio
+    env.transaction_threshold_ratio = 0.0
+    env.reset()
+    action = first_action
+    while True:
+        obs, _, dones, _, info = env.step(action)
+        action = obs['portfolio_dist']
         if dones:
             break
-    return env.get_portfolio_size_history()
-
-
-def validation_hold(predict_fn: Callable[[pd.DataFrame], np.ndarray], env: PortfolioOptimizationEnv):
-    test_obs, _ = env.reset()
-    action = predict_fn(test_obs)
-    while True:
-        test_obs, _, dones, _, info = env.step(action)
-        action = info['real_weights']
-        if dones:
-            break
+    env.transaction_threshold_ratio = old_ttr
     return env.get_portfolio_size_history()
 
 
 def backtest():
-    train, trade = load_dataset()
-    env_trade = build_env(trade, verbose=2)
+    train, trade = load_datasets()
+    env_trade = build_continuous_env(trade, env_check=False, verbose=2)
     print(get_start_end_dates(trade))
 
-    # trained_model = PPO.load('trained_models/agent_ppo')
-    # model_predict_fun = lambda obs: trained_model.predict(obs, deterministic=True)[0]
+    trained_model = agent_class.load(f'trained_models/{exp_name}/best_model.zip')
+    env_train = build_continuous_env(train, env_check=False, verbose=0)
+    _, lstm_states = validation(trained_model, None, env_train)
 
-    policy = EI3(time_window=time_window, initial_features=len(env_trade.window_features))
-    policy.load_state_dict(torch.load('trained_models/policy_EI3.pt'))
-    PolicyGradient(env_trade).test(env_trade, online_training_period=999990, policy=policy)
-
-    mvo_result = modern_portfolio_theory(train)  # Обучаемся на train
-    mvo_fun = lambda obs: mvo_result
+    # Обучаемся на train
+    mvo_result = modern_portfolio_theory(train)
 
     portfolio_size = trade['tic'].nunique()
-    ubah_fun = lambda obs: [0] + [1 / portfolio_size] * portfolio_size
+    ubah_result = [0] + [1 / portfolio_size] * portfolio_size
 
     # Тут именно берём топ акций, которые вырастут на trade,
     # отсекаем первое окно, поскольку оно не участвует в сравнении
-    top_5_stocks = top_stocks(trade, 5, skip_first=time_window)
-    top_5_fun = lambda obs: top_5_stocks
+    top_10_stocks = top_stocks(trade, 10, skip_first=time_window)
 
-    top_1_stocks = top_stocks(trade, 1, skip_first=time_window)
-    top_1_fun = lambda obs: top_1_stocks
+    print('------------------------------------ model ------------------------------------')
+    account_value_model, _ = validation(trained_model, lstm_states, env_trade)
+    plt.show()  # Визуализируем результат из render()
+    print('------------------------------------- mvo -------------------------------------')
+    account_value_mvo = validation_hold(mvo_result, env_trade)
+    print('------------------------------------- ubah -------------------------------------')
+    account_value_ubah = validation_hold(ubah_result, env_trade)
+    print('------------------------------------ top_10 ------------------------------------')
+    account_value_top_5 = validation_hold(top_10_stocks, env_trade)
 
-    # profiler = LineProfiler()
-    # profiler.add_function(validation)
-    # profiler.add_function(env_trade.step)
-    # profiler.add_function(env_trade._rebalance_portfolio)
-    # profiler.add_function(env_trade._allocate_with_fee)
-    # profiler.add_function(env_trade._get_state_and_info_from_time_index)
-    # profiler.add_function(discrete_allocation_custom)
-    # profiler.add_function(RNNPolicyNetwork.forward)
-    #
-    # profiler_wrapper = profiler(validation)
-    # account_value_model = profiler_wrapper(model_predict_fun, env_trade)
-    account_value_model = env_trade.get_portfolio_size_history()
-    account_value_mvo = validation_hold(mvo_fun, env_trade)
-    account_value_ubah = validation_hold(ubah_fun, env_trade)
-    account_value_top_5 = validation_hold(top_5_fun, env_trade)
-    account_value_top_1 = validation_hold(top_1_fun, env_trade)
+    plt.figure(figsize=(12, 6))
+    plt.plot(account_value_model, label='Model', color='green')
+    plt.plot(account_value_mvo, label='MVO', color='blue')
+    plt.plot(account_value_ubah, label='UBAH', color='orange')
+    plt.plot(account_value_top_5, label='TOP_10', color='red')
 
-    plt.plot(account_value_model, label="PPO model")
-    plt.plot(account_value_mvo, label="MVO")
-    plt.plot(account_value_ubah, label="UBAH")
-    plt.plot(account_value_top_5, label="TOP_5")
-    plt.plot(account_value_top_1, label="TOP_1")
-    plt.xlabel("Times")
-    plt.ylabel("Portfolio Value")
-    plt.title("Performance")
+    plt.title('Performance')
+    plt.xlabel('Times')
+    plt.ylabel('Portfolio Value')
     plt.legend()
+    plt.grid(alpha=0.3)
     plt.show()
-
-    # profiler.print_stats()
 
 
 if __name__ == '__main__':
