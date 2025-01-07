@@ -68,8 +68,7 @@ class PortfolioOptimizationEnv(gym.Env):
             tic_column='tic',
             lot_column='lot',
             time_window=64,
-            reward_type='excess_absolute',
-            reward_scaling=10,
+            reward_type='excess_log',
             reward_scaling=100,
             fee_ratio=0.003,
             transaction_threshold_ratio=0.01,
@@ -176,15 +175,20 @@ class PortfolioOptimizationEnv(gym.Env):
         metrics_df.set_index('date', inplace=True)
 
         # Считаем среднее число транзакций без учёта первых покупок
-        final_num_transactions = self.num_of_transactions - np.count_nonzero(self._tic_counts_memory[0])
-        mean_transactions = final_num_transactions / (len(self._tic_counts_memory) - 1)
+        final_num_transactions = self.num_of_transactions - np.count_nonzero(self._tic_counts_memory[1])
+        mean_transactions = final_num_transactions / (len(self._tic_counts_memory) - 2)
 
         # Продаём всё, перед тем как считать профит
         sell_all_weights = np.array([1] + [0] * self.portfolio_size)
-        final_portfolio_value = self._rebalance_portfolio(sell_all_weights)[0].sum()
+        # Отключаем threshold на продажу всех активов
+        old_ttr = self.transaction_threshold_ratio
+        self.transaction_threshold_ratio = 0.0
+        final_portfolio_value = self._rebalance_portfolio(sell_all_weights).sum()
+        self.transaction_threshold_ratio = old_ttr
+        # Чистый учёт профита - финальный кеш (вне активов) делим на исходный
         profit = final_portfolio_value / self.initial_amount
 
-        # Берёт с отрицанием, чтобы просадка была положительной
+        # Берём с отрицанием, чтобы просадка была положительной
         max_draw_down = -qs.stats.max_drawdown(metrics_df['portfolio_values'])
         sharpe_ratio, sortino_ratio = utils.sharpe_sortino(metrics_df)
         fee_ratio = self.commission_paid / self.initial_amount
@@ -300,7 +304,11 @@ class PortfolioOptimizationEnv(gym.Env):
                 elif elem < 0:
                     print(f'{date}: продано {-elem} акций {tics[idx]}')
         if self.verbose > 1 and len(transactions) > 0:
-            print(f'Открыто {np.count_nonzero(tic_counts)} позиций:')
+            num_pos = np.count_nonzero(tic_counts)
+            if num_pos == 0:
+                print(f'Все позиции закрыты! Остаток кеша: {rest_cash}')
+                return
+            print(f'Открыто {num_pos} позиций:')
             for idx in np.nonzero(tic_counts)[0]:
                 elem = tic_counts[idx]
                 print(f'{tics[idx]}={elem}', end=', ')
@@ -346,11 +354,12 @@ class PortfolioOptimizationEnv(gym.Env):
             if rest_cash >= 0:
                 break
 
+        self.commission_paid += fee
         self._tic_counts_memory.append(tic_counts)
         self.eval_trades(rest_cash)
 
         real_values[0] = rest_cash
-        return real_values, fee
+        return real_values
 
     def _allocate_with_fee(self, price, weights, multipliers, reserved):
         tic_price = price[1:]
