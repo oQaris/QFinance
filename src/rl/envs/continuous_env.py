@@ -70,6 +70,7 @@ class PortfolioOptimizationEnv(gym.Env):
             time_window=64,
             reward_type='excess_absolute',
             reward_scaling=10,
+            reward_scaling=100,
             fee_ratio=0.003,
             transaction_threshold_ratio=0.01,
             verbose=0,
@@ -202,6 +203,8 @@ class PortfolioOptimizationEnv(gym.Env):
             'fee_ratio': fee_ratio,
             'mean_position_tic': mean_position_tic,
             'mean_transactions': mean_transactions,
+            'mean_reward': np.mean(self._reward_memory),
+            'std_reward': np.std(self._reward_memory),
         }
 
     def step(self, actions):
@@ -277,6 +280,8 @@ class PortfolioOptimizationEnv(gym.Env):
             reward = math.log(rate_of_return / rate_of_mean_return)
         else:
             raise ValueError(f"Unknown reward type: {self.reward_type}")
+        reward *= self.reward_scaling
+        self._reward_memory.append(reward)
 
         if terminal:
             terminal_stats = self.get_terminal_stats()
@@ -289,7 +294,7 @@ class PortfolioOptimizationEnv(gym.Env):
                     print(f'{key}: {value}')
                 print('=================================')
 
-        return state, reward * self.reward_scaling, terminal, False, info
+        return state, reward, terminal, False, info
 
     def eval_trades(self, rest_cash):
         tic_counts = self._tic_counts_memory[-1]
@@ -476,6 +481,7 @@ class PortfolioOptimizationEnv(gym.Env):
     def _reset_memory(self):
         self._asset_memory = [self.initial_amount]
         self._portfolio_return_memory = [0]
+        self._reward_memory = []
         # Начальное действие - все деньги в кеше
         self._actions_memory = [
             np.array([1] + [0] * self.portfolio_size, dtype=np.float64)
