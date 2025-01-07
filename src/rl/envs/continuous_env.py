@@ -3,15 +3,16 @@ from __future__ import annotations
 import math
 import warnings
 
-import gymnasium as gym
 import numpy as np
 import pandas as pd
 import quantstats as qs
 from gymnasium import spaces
+from typing_extensions import override
 
 from src.rl.algs import utils
 from src.rl.algs.distributor import discrete_allocation_custom, minimize_transactions
 from src.rl.algs.utils import plot_with_risk_free, calculate_periods_per_year, calculate_equal_weight_portfolio
+from src.rl.envs.base_env import BaseEnv
 
 
 def _softmax(x):
@@ -32,13 +33,12 @@ def _custom_softmax(x):
     return result
 
 
-def scale_to_unit_sum(arr):
+def _scale_to_unit_sum(arr):
     """
     Масштабирует массив NumPy в диапазон [0, 1] так, чтобы сумма элементов была равна 1.
     Корректно работает с отрицательными значениями и типами float32.
     """
     arr = arr.astype(np.float64)  # Приводим к float64 для избежания переполнения
-
     arr_min = np.min(arr)
     arr_max = np.max(arr)
 
@@ -50,19 +50,18 @@ def scale_to_unit_sum(arr):
 
     # Нормализация так, чтобы сумма была равна 1
     result = scaled / np.sum(scaled)
-
     return result.astype(np.float32)  # Возвращаем в исходный тип float32
 
 
-class PortfolioOptimizationEnv(gym.Env):
+class PortfolioOptimizationEnv(BaseEnv):
 
     def __init__(
             self,
             df,
-            initial_amount,
-            window_features=['close', 'high', 'low', 'volume'],
-            indicators_features=['macd', 'rsi_14', 'adx', 'return_lag_7', 'P/E', 'EV/EBITDA'],
-            time_features=['vix', 'turbulence'],
+            initial_amount: float,
+            window_features=('close', 'high', 'low', 'volume'),
+            indicators_features=('macd', 'rsi_14', 'adx', 'return_lag_7', 'P/E', 'EV/EBITDA'),
+            time_features=('vix', 'turbulence'),
             valuation_column='price',
             time_column='date',
             tic_column='tic',
@@ -161,54 +160,6 @@ class PortfolioOptimizationEnv(gym.Env):
         self.render_mode = 'human'
         self._reset_memory()
 
-    def get_terminal_stats(self):
-        # Преобразуем данные в DataFrame
-        metrics_df = pd.DataFrame({
-            'date': self._date_memory,
-            'returns': self._portfolio_return_memory,
-            'portfolio_values': self._asset_memory,
-            'tic_counts': self._tic_counts_memory
-        })
-
-        # Убедимся, что дата является DatetimeIndex
-        metrics_df['date'] = pd.to_datetime(metrics_df['date'])
-        metrics_df.set_index('date', inplace=True)
-
-        # Считаем среднее число транзакций без учёта первых покупок
-        final_num_transactions = self.num_of_transactions - np.count_nonzero(self._tic_counts_memory[1])
-        mean_transactions = final_num_transactions / (len(self._tic_counts_memory) - 2)
-
-        # Продаём всё, перед тем как считать профит
-        sell_all_weights = np.array([1] + [0] * self.portfolio_size)
-        # Отключаем threshold на продажу всех активов
-        old_ttr = self.transaction_threshold_ratio
-        self.transaction_threshold_ratio = 0.0
-        final_portfolio_value = self._rebalance_portfolio(sell_all_weights).sum()
-        self.transaction_threshold_ratio = old_ttr
-        # Чистый учёт профита - финальный кеш (вне активов) делим на исходный
-        profit = final_portfolio_value / self.initial_amount
-
-        # Берём с отрицанием, чтобы просадка была положительной
-        max_draw_down = -qs.stats.max_drawdown(metrics_df['portfolio_values'])
-        sharpe_ratio, sortino_ratio = utils.sharpe_sortino(metrics_df)
-        fee_ratio = self.commission_paid / self.initial_amount
-
-        # Первый элемент не учитываем, т.к. там нули
-        positions = np.stack(metrics_df['tic_counts'].values[1:])
-        mean_position_tic = np.count_nonzero(positions, axis=1).mean()
-
-        return {
-            'profit': profit,
-            'max_draw_down': max_draw_down,
-            'sharpe_ratio': sharpe_ratio,
-            'sortino_ratio': sortino_ratio,
-            'fee_ratio': fee_ratio,
-            'mean_position_tic': mean_position_tic,
-            'mean_transactions': mean_transactions,
-            'mean_reward': np.mean(self._reward_memory),
-            'std_reward': np.std(self._reward_memory),
-        }
-
     def step(self, actions):
         terminal = self.is_terminal_state()
         info = {}
@@ -219,8 +170,8 @@ class PortfolioOptimizationEnv(gym.Env):
         else:
             # print('_custom_softmax')
             # weights = _custom_softmax(actions)
-            # weights = _softmax(actions)
-            weights = scale_to_unit_sum(actions)
+            weights = _softmax(actions)
+            # weights = _scale_to_unit_sum(actions)
 
         # save initial portfolio weights for this time step
         self._actions_memory.append(weights)
@@ -288,6 +239,80 @@ class PortfolioOptimizationEnv(gym.Env):
                 print('=================================')
 
         return state, reward, terminal, False, info
+
+    def reset(self, seed=None, options=None):
+        super().reset(seed=seed)
+        self.commission_paid = 0.0
+        self.num_of_transactions = 0
+        self.time_index = self.time_window - 1
+        self._reset_memory()
+
+        state = self._get_state_and_info_from_time_index(self.time_index)
+        self.portfolio_value = self.initial_amount
+
+        return state, {}
+
+    def render(self):
+        if self.is_terminal_state():
+            mean_portfolio = calculate_equal_weight_portfolio(self.initial_amount, self._mean_temporal_variation)
+            plot_with_risk_free(self._asset_memory, calculate_periods_per_year(self._df),
+                                equal_weight_portfolio=mean_portfolio)
+
+    @override
+    def is_terminal_state(self) -> bool:
+        return self.time_index >= len(self._sorted_times) - 2
+
+    @override
+    def get_portfolio_size_history(self) -> list[float]:
+        return self._asset_memory
+
+    def get_terminal_stats(self) -> dict:
+        # Преобразуем данные в DataFrame
+        metrics_df = pd.DataFrame({
+            'date': self._date_memory,
+            'returns': self._portfolio_return_memory,
+            'portfolio_values': self._asset_memory,
+            'tic_counts': self._tic_counts_memory
+        })
+
+        # Убедимся, что дата является DatetimeIndex
+        metrics_df['date'] = pd.to_datetime(metrics_df['date'])
+        metrics_df.set_index('date', inplace=True)
+
+        # Считаем среднее число транзакций без учёта первых покупок
+        final_num_transactions = self.num_of_transactions - np.count_nonzero(self._tic_counts_memory[1])
+        mean_transactions = final_num_transactions / (len(self._tic_counts_memory) - 2)
+
+        # Продаём всё, перед тем как считать профит
+        sell_all_weights = np.array([1] + [0] * self.portfolio_size)
+        # Отключаем threshold на продажу всех активов
+        old_ttr = self.transaction_threshold_ratio
+        self.transaction_threshold_ratio = 0.0
+        final_portfolio_value = self._rebalance_portfolio(sell_all_weights).sum()
+        self.transaction_threshold_ratio = old_ttr
+        # Чистый учёт профита - финальный кеш (вне активов) делим на исходный
+        profit = final_portfolio_value / self.initial_amount
+
+        # Берём с отрицанием, чтобы просадка была положительной
+        max_draw_down = -qs.stats.max_drawdown(metrics_df['portfolio_values'])
+        sharpe_ratio, sortino_ratio = utils.sharpe_sortino(metrics_df)
+        fee_ratio = self.commission_paid / self.initial_amount
+
+        # Первый элемент не учитываем, т.к. там нули
+        positions = np.stack(metrics_df['tic_counts'].values[1:])
+        mean_position_tic = np.count_nonzero(positions, axis=1).mean()
+
+        return {
+            'profit': profit,
+            'max_draw_down': max_draw_down,
+            'sharpe_ratio': sharpe_ratio,
+            'sortino_ratio': sortino_ratio,
+            'fee_ratio': fee_ratio,
+            'mean_position_tic': mean_position_tic,
+            'mean_transactions': mean_transactions,
+            'mean_reward': np.mean(self._reward_memory),
+            'std_reward': np.std(self._reward_memory),
+        }
 
     def eval_trades(self, rest_cash):
         tic_counts = self._tic_counts_memory[-1]
@@ -396,27 +421,6 @@ class PortfolioOptimizationEnv(gym.Env):
                 f'Portfolio size is not the same before ({value_before}) and after ({new_real_values.sum()}) allocation.')
         return new_real_values, fee, new_tic_counts
 
-    def reset(self, seed=None, options=None):
-        super().reset(seed=seed)
-        self.commission_paid = 0.0
-        self.num_of_transactions = 0
-        self.time_index = self.time_window - 1
-        self._reset_memory()
-
-        state = self._get_state_and_info_from_time_index(self.time_index)
-        self.portfolio_value = self.initial_amount
-
-        return state, {}
-
-    def render(self):
-        if self.is_terminal_state():
-            mean_portfolio = calculate_equal_weight_portfolio(self.initial_amount, self._mean_temporal_variation)
-            plot_with_risk_free(self._asset_memory, calculate_periods_per_year(self._df),
-                                equal_weight_portfolio=mean_portfolio)
-
-    def is_terminal_state(self):
-        return self.time_index >= len(self._sorted_times) - 2
-
     def _get_state_and_info_from_time_index(self, time_index):
         # Определение временного диапазона
         end_time = self._sorted_times[time_index]
@@ -477,7 +481,7 @@ class PortfolioOptimizationEnv(gym.Env):
 
     def _reset_memory(self):
         self._asset_memory = [self.initial_amount]
-        self._portfolio_return_memory = [0]
+        self._portfolio_return_memory = [0.0]
         self._reward_memory = []
         # Начальное действие - все деньги в кеше
         self._actions_memory = [
@@ -531,6 +535,3 @@ class PortfolioOptimizationEnv(gym.Env):
             .reset_index(drop=True)
         )
         return df_temporal_variation
-
-    def get_portfolio_size_history(self):
-        return self._asset_memory

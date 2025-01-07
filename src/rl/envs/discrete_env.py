@@ -1,17 +1,18 @@
 from __future__ import annotations
 
-import gymnasium as gym
 import numpy as np
 import pandas as pd
 import quantstats as qs
 from gymnasium import spaces
 from line_profiler import profile
+from typing_extensions import override
 
 from src.rl.algs import utils
 from src.rl.algs.utils import plot_with_risk_free, calculate_periods_per_year
+from src.rl.envs.base_env import BaseEnv
 
 
-class StockTradingEnv(gym.Env):
+class StockTradingEnv(BaseEnv):
 
     def __init__(
             self,
@@ -219,8 +220,8 @@ class StockTradingEnv(gym.Env):
             np.array(self.state[1: (self.stock_dim + 1)])
             * np.array(self.state[(self.stock_dim + 1): (self.stock_dim * 2 + 1)])
         )
-        self.asset_memory.append(end_total_asset)
-        self.account_value_memory.append(end_total_asset)
+        self.asset_memory.append(end_total_asset.item())
+        self.account_value_memory.append(end_total_asset.item())
         self.date_memory.append(self._get_date())
 
         # Вычисляем награду
@@ -381,8 +382,10 @@ class StockTradingEnv(gym.Env):
         if self.is_terminal_state():
             plot_with_risk_free(self.account_value_memory, calculate_periods_per_year(self.df))
 
+    @override
     def is_terminal_state(self):
         return self.time_index >= self.num_periods - 2
 
+    @override
     def get_portfolio_size_history(self):
         return self.account_value_memory
