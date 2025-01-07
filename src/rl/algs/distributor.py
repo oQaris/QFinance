@@ -5,7 +5,9 @@ import pandas as pd
 from pypfopt import DiscreteAllocation
 
 
-def discrete_allocation_custom(weights: np.ndarray, prices: np.ndarray, total_sum: float) -> np.ndarray:
+def discrete_allocation_custom(weights: np.ndarray[float],
+                               prices: np.ndarray[float],
+                               total_sum: float) -> np.ndarray[float]:
     # Рассчитываем целевые суммы для каждого актива
     target_allocations = weights * total_sum
 
@@ -33,7 +35,10 @@ def discrete_allocation_custom(weights: np.ndarray, prices: np.ndarray, total_su
     return num_shares * prices
 
 
-def minimize_transactions(price: np.ndarray, diff_tic_counts: np.ndarray, min_transaction: float, cash_balance: float):
+def minimize_transactions(price: np.ndarray[float],
+                          diff_tic_counts: np.ndarray[int],
+                          min_transaction: float,
+                          cash_balance: float) -> np.ndarray[int]:
     """
     Минимизирует количество транзакций при ребалансировке портфеля.
 

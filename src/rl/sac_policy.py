@@ -2,7 +2,7 @@ from typing import Optional, Dict, Any, Union, Type, List, Tuple
 
 import torch
 import torch.nn as nn
-from gym import spaces
+from gymnasium import spaces
 from stable_baselines3.common.distributions import Distribution, SelfDistribution
 from stable_baselines3.common.policies import ContinuousCritic, BasePolicy, ActorCriticPolicy
 from stable_baselines3.common.torch_layers import BaseFeaturesExtractor, get_actor_critic_arch

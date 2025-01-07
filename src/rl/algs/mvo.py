@@ -4,7 +4,7 @@ from pypfopt import expected_returns, BlackLittermanModel
 from pypfopt import risk_models
 from pypfopt.efficient_frontier import EfficientFrontier
 
-from src.rl.traint_test.trainer import load_dataset
+from src.rl.traint_test.env_builder import load_datasets
 
 
 def modern_portfolio_theory(df):
@@ -99,7 +99,7 @@ def top_stocks(df, n: int, skip_first: int = 0):
 
 
 if __name__ == '__main__':
-    _, trade = load_dataset()
+    _, trade = load_datasets()
 
     # profiler = LineProfiler()
     # profiler.add_function(top_stocks)

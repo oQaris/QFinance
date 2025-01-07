@@ -30,7 +30,7 @@ def fill_missing_dates_expert(group, dates):
     return filled_group.ffill().bfill()
 
 
-def preprocess_dataframe(df_input):
+def preprocess_dataframe(df_input, fill_threshold_ratio=0.25):
     df = df_input.copy()
 
     # Транспонирование VIX
@@ -48,8 +48,7 @@ def preprocess_dataframe(df_input):
     print(tic_counts)
     print()
 
-    median_count = tic_counts.median()
-    threshold = median_count / 1.5
+    threshold = tic_counts.max() * (1 - fill_threshold_ratio)
     len_old = len(df)
     unfulfilled = tic_counts[tic_counts < threshold].index
     df = df[~df['tic'].isin(unfulfilled)]

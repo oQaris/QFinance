@@ -2,6 +2,7 @@ import numpy as np
 import pandas as pd
 from bs4 import BeautifulSoup
 from selenium import webdriver
+from tqdm import tqdm
 
 from src.data_engine.utils import check_file_path, string_to_utc_datetime
 
@@ -52,9 +53,9 @@ def load_fundamentals(tics):
     chrome_driver = webdriver.Chrome()
 
     fundamentals = pd.DataFrame()
-    for tic in tics:
+    for tic in (pbar := tqdm(tics)):
+        pbar.set_description(f'Processing {tic}')
         ticker_data = fetch_finam_data(chrome_driver, tic)
-        print(ticker_data)
         fundamentals = pd.concat([fundamentals, ticker_data], axis=0)
     chrome_driver.close()
 

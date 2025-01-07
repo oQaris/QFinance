@@ -1,5 +1,6 @@
 import asyncio
 import os
+import warnings
 
 import pandas as pd
 from tinkoff.invest import CandleInterval
@@ -12,6 +13,9 @@ from src.data_engine.technical import *
 from src.data_engine.utils import check_file_path
 from src.data_engine.validator import StockQuoteValidator
 
+warnings.filterwarnings("ignore",
+                        message=".*A value is trying to be set on a copy of a slice from a DataFrame.*")
+
 if __name__ == '__main__':
     # токен для Invest API должен быть в этой переменной окружения
     # https://www.tbank.ru/invest/settings/api/
@@ -23,7 +27,7 @@ if __name__ == '__main__':
 
     # название датасета
     # name = '2023-10-01_2024-10-04_HOUR'
-    name = '{}_{}_{}'.format(start_date.split(' ')[0], end_date.split(' ')[0], str(time_interval)[31:])
+    name = '{}_{}_{}'.format(start_date.split(' ')[0], end_date.split(' ')[0], time_interval.name[16:])
     print(name)
 
     raw_path = f'../../data/raw/{name}.csv'
@@ -47,6 +51,7 @@ if __name__ == '__main__':
     if not os.path.isfile(fin_data_path):
         print('Скачиваем финансовые данные Finam...')
         fin_data = load_fundamentals(result_df['tic'].unique())
+        fin_data.to_csv(fin_data_path, index=False)
     else:
         print('Загружаем фундаментальные индикаторы...')
         fin_data = pd.read_csv(fin_data_path)
@@ -63,7 +68,7 @@ if __name__ == '__main__':
     result_df = add_fundamental_indicator(result_df, fin_data)
 
     print('Проверяем данные...')
-    validator = StockQuoteValidator(threshold=0.8)
+    validator = StockQuoteValidator(threshold=0.6)
     result = validator.validate(result_df)
     for e in result:
         print(e)

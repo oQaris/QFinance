@@ -84,26 +84,25 @@ def calculate_equal_weight_portfolio(initial_amount, mean_temporal_variation):
 
 def plot_with_risk_free(portfolio, n_periods_per_year, rf_rate=yearly_risk_free_rate, equal_weight_portfolio=None):
     """
-    Рисует график с кривыми стратегии, безубыточного актива и равномерного распределенного портфеля.
+    Создаёт график с кривыми стратегии, безубыточного актива и равномерного распределенного портфеля.
+    Для вывода на экран необходимо вызвать `plt.show()` (сделано для возможности добавления кривых)
     """
     len_trade = len(portfolio)
     daily_rf_rate = (1 + rf_rate) ** (1 / n_periods_per_year) - 1
     risk_free_portfolio = portfolio[0] * (1 + daily_rf_rate) ** np.arange(len_trade)
 
     plt.figure(figsize=(12, 6))
-    plt.plot(portfolio, label="Стратегия", color="green")
-    plt.plot(risk_free_portfolio, label=f"Безубыточный актив ({rf_rate * 100:.2f}% годовых)", color="blue",
-             linestyle="--")
+    plt.plot(portfolio, label="Model", color="green")
+    plt.plot(risk_free_portfolio, label=f"Break-even asset {rf_rate * 100:.2f}%", color="blue", linestyle="--")
 
     if equal_weight_portfolio is not None:
-        plt.plot(equal_weight_portfolio, label="Равномерно распределенный портфель", color="orange", linestyle=":")
+        plt.plot(equal_weight_portfolio, label="UBAH", color="orange", linestyle=":")
 
-    plt.title("Изменение размера портфеля", fontsize=16)
-    plt.xlabel("Периоды", fontsize=14)
-    plt.ylabel("Размер портфеля", fontsize=14)
+    plt.title("Performance", fontsize=16)
+    plt.xlabel("Times", fontsize=14)
+    plt.ylabel("Portfolio Value", fontsize=14)
     plt.legend(fontsize=12)
     plt.grid(alpha=0.3)
-    plt.show()
 
 
 if __name__ == '__main__':
@@ -130,3 +129,4 @@ if __name__ == '__main__':
 
     # Построение графика
     plot_with_risk_free(test_portfolio, test_periods)
+    plt.show()
