@@ -77,7 +77,7 @@ class GeGLUFFNNetExtractor(BaseFeaturesExtractor):
         super().__init__(observation_space, features_dim)
         input_dim = 0
         if observation_space is gym.spaces.Dict:
-            for key, subspace in observation_space.spaces.items():
+            for key, subspace in observation_space.spaces.items():  # type: ignore
                 input_dim += get_flattened_obs_dim(subspace)
         else:
             input_dim = get_flattened_obs_dim(observation_space)
@@ -87,11 +87,11 @@ class GeGLUFFNNetExtractor(BaseFeaturesExtractor):
 
     def forward(self, observations) -> th.Tensor:
         if type(observations) is dict:
-            tensors = []
-            for key, tensor in observations.items():
-                tensors.append(self.flatten(tensor))
+            # Сортируем ключи для обеспечения стабильности
+            tensors = [self.flatten(observations[key]) for key in sorted(observations.keys())]
             x = th.cat(tensors, dim=1)
         else:
+            # Если это не словарь, просто обрабатываем
             x = self.flatten(observations)
         x = self.linear(x)
         x = self.geglu_ffn_net(x)
