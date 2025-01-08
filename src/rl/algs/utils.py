@@ -91,6 +91,9 @@ def plot_with_risk_free(portfolio, n_periods_per_year, rf_rate=yearly_risk_free_
     daily_rf_rate = (1 + rf_rate) ** (1 / n_periods_per_year) - 1
     risk_free_portfolio = portfolio[0] * (1 + daily_rf_rate) ** np.arange(len_trade)
 
+    #todo More than 20 figures have been opened. Figures created through the pyplot interface (`matplotlib.pyplot.figure`)
+    # are retained until explicitly closed and may consume too much memory. (To control this warning, see the rcParam `figure.max_open_warning`).
+    # Consider using `matplotlib.pyplot.close()`.
     plt.figure(figsize=(12, 6))
     plt.plot(portfolio, label="Model", color="green")
     plt.plot(risk_free_portfolio, label=f"Break-even asset {rf_rate * 100:.2f}%", color="blue", linestyle="--")

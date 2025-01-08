@@ -52,7 +52,7 @@ def train_agent(train, test):
     # VecNormalize(DummyVecEnv([lambda: build_continuous_env(dataset)]))
 
     eval_callback = CustomEvalCallback(env_eval, best_model_save_path=f'trained_models/{exp_name}/',
-                                       by_stat='sortino_ratio',
+                                       # by_stat='sortino_ratio',
                                        deterministic=True, render=True)
     log_callback = EnvTerminalStatsLoggingCallback()
 
@@ -104,10 +104,7 @@ def train_agent(train, test):
             tb_log_name=exp_name
         )
     except KeyboardInterrupt:
-        print('Обучение прервано вручную. Сохраняем модель...')
-    finally:
-        agent.save(f'trained_models/{exp_name}/final_model')
-        print('Модель успешно сохранена.')
+        print('Обучение прервано вручную.')
 
 
 if __name__ == '__main__':

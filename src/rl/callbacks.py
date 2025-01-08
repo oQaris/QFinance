@@ -1,5 +1,6 @@
 import os
 import pickle
+import warnings
 from typing import List, Dict, Any, Optional, Callable
 
 import gymnasium as gym
@@ -54,10 +55,15 @@ class EnvTerminalStatsLoggingCallback(BaseCallback):
 
 
 class CustomEvalCallback(EventCallback):
+    BEST_MODEL_PREFIX = 'best_model'
+    LSTM_STATE_SUFFIX = '_lstm_states.pkl'
+    DELIMITER = '-'
+    ZIP = '.zip'
+
     def __init__(
             self,
             eval_env: gym.Env | VecEnv,
-            by_stat: str = 'sortino_ratio',
+            by_stats: tuple[str] = ('sharpe_ratio', 'sortino_ratio', 'profit', 'mean_reward'),
             best_model_save_path: Optional[str] = None,
             deterministic: bool = True,
             render: bool = False,  # todo рендерить каждые n эпизодов
@@ -65,17 +71,24 @@ class CustomEvalCallback(EventCallback):
     ):
         super().__init__(verbose=verbose)
 
+        if any(self.DELIMITER in stat for stat in by_stats):
+            raise ValueError(
+                f"Statistics in by_stats cannot contain the '{self.DELIMITER}' character, as it is used as a delimiter in file names.")
+
         # Convert to VecEnv for consistency
         if not isinstance(eval_env, VecEnv):
             eval_env = DummyVecEnv([lambda: eval_env])  # type: ignore[list-item, return-value]
 
+        if len(os.listdir(best_model_save_path)) > 0:
+            warnings.warn(f'The directory for saving models is not empty, the results will be overwritten.')
+
         self.eval_env = eval_env
-        self.by_stat = by_stat
+        self.by_stats = by_stats
         self.best_model_save_path = best_model_save_path
         self.deterministic = deterministic
         self.render = render
 
-        self.best_mean_reward = -np.inf
+        self.best_reward_by_stat = [-np.inf for _ in range(len(by_stats))]
         self.n_eval_episodes = 1
         self.is_recurrent = False
 
@@ -89,7 +102,85 @@ class CustomEvalCallback(EventCallback):
         if self.best_model_save_path is not None:
             os.makedirs(self.best_model_save_path, exist_ok=True)
 
-    def _log_success_callback(self, locals_: Dict[str, Any]) -> None:
+    def _create_name_by_stats(self, stats):
+        """Create new model name based on updated stats."""
+        return f'{self.BEST_MODEL_PREFIX}{self.DELIMITER}{self.DELIMITER.join(stats)}'
+
+    def _get_lstm_file_by_model(self, model_file):
+        return os.path.join(self.best_model_save_path, f'{model_file.removesuffix(self.ZIP)}{self.LSTM_STATE_SUFFIX}')
+
+    def _save_model(self, model_name):
+        """Save the model and its LSTM states (if recurrent)."""
+        if self.best_model_save_path is not None:
+            self.model.save(os.path.join(self.best_model_save_path, model_name))
+            if self.is_recurrent:
+                with open(self._get_lstm_file_by_model(model_name), "wb") as fp:
+                    pickle.dump(self.model._last_lstm_states, fp)  # type: ignore
+
+    def _update_model_files(self, updated_stats):
+        """Update model files based on updated statistics."""
+        if not self.best_model_save_path:
+            return
+
+        existing_files = os.listdir(self.best_model_save_path)
+        model_files = [f for f in existing_files if f.startswith(self.BEST_MODEL_PREFIX) and f.endswith(self.ZIP)]
+
+        for file in model_files:
+            stats_in_file = (file
+                             .removeprefix(self.BEST_MODEL_PREFIX + self.DELIMITER)
+                             .removesuffix(self.ZIP)
+                             .split(self.DELIMITER))
+            remaining_stats = [stat for stat in stats_in_file if stat not in updated_stats]
+            old_path = os.path.join(self.best_model_save_path, file)
+
+            if remaining_stats:
+                new_name = self._create_name_by_stats(remaining_stats)
+
+                if new_name + self.ZIP != file:  # Avoid overwriting the same file
+                    new_path = os.path.join(self.best_model_save_path, new_name + self.ZIP)
+                    if os.path.exists(new_path):
+                        os.remove(new_path)
+                    os.rename(
+                        old_path,
+                        new_path
+                    )
+                    if self.is_recurrent:
+                        new_lstm_path = self._get_lstm_file_by_model(new_name)
+                        if os.path.exists(new_lstm_path):
+                            os.remove(new_lstm_path)
+                        os.rename(
+                            self._get_lstm_file_by_model(file),
+                            new_lstm_path
+                        )
+            else:
+                os.remove(old_path)
+                if self.is_recurrent:
+                    os.remove(self._get_lstm_file_by_model(file))
+
+    def _evaluate(self, aggregated_stats: dict) -> None:
+        updated_stats = []
+        for i, stat in enumerate(self.by_stats):
+            mean_reward = aggregated_stats[stat]
+            if mean_reward > self.best_reward_by_stat[i]:
+                self.best_reward_by_stat[i] = mean_reward
+                updated_stats.append(stat)
+
+        if self.verbose >= 1:
+            print(f'Eval num_timesteps={self.num_timesteps}, ' + ", ".join(
+                [f'{stat}={aggregated_stats[stat]:.5f}' for stat in self.by_stats]
+            ))
+
+        if updated_stats:
+            if self.verbose >= 1:
+                print(f'New best mean reward! Updated stats: {updated_stats}')
+            # Update existing model files first
+            self._update_model_files(updated_stats)
+            # Save the updated model
+            self._save_model(self._create_name_by_stats(updated_stats))
+        else:
+            plt.close(plt.gcf())  # Закрываем фигуру, отрисованную в render()
+
+    def _success_callback(self, locals_: Dict[str, Any]) -> None:
         """
         Callback passed to the ``evaluate_policy`` function
         in order to log the success rate (when applicable),
@@ -99,6 +190,7 @@ class CustomEvalCallback(EventCallback):
             self.eval_env.render()
         dones = locals_.get('dones', [])
         infos = locals_.get('infos', {})
+
         aggregated_stats = get_terminal_stats(dones, infos)
         if aggregated_stats is None:
             return
@@ -106,23 +198,7 @@ class CustomEvalCallback(EventCallback):
         for key, mean_value in aggregated_stats.items():
             self.logger.record(f'env_test/{key}', mean_value)
 
-        mean_reward = aggregated_stats[self.by_stat]
-        if self.verbose >= 1:
-            print(f'Eval num_timesteps={self.num_timesteps}, '
-                  f'episode_reward={mean_reward:.5f}')
-        if mean_reward > self.best_mean_reward:
-            if self.render:
-                plt.show()
-            if self.best_model_save_path is not None:
-                self.model.save(os.path.join(self.best_model_save_path, 'best_model'))
-                if self.is_recurrent:
-                    with open(os.path.join(self.best_model_save_path, 'best_lstm_states'), "wb") as fp:
-                        pickle.dump(self.model._last_lstm_states, fp)  # type:  ignore
-            self.best_mean_reward = mean_reward
-            if self.verbose >= 1:
-                print(f'New best mean reward!')
-        else:
-            plt.close(plt.gcf())  # Закрываем фигуру, отрисованную в render()
+        self._evaluate(aggregated_stats)
 
     def _on_step(self) -> bool:
         dones = self.locals.get('dones', [])
@@ -149,7 +225,7 @@ class CustomEvalCallback(EventCallback):
             start_states=self.model._last_lstm_states.pi if self.is_recurrent else None,  # type:  ignore
             n_eval_episodes=self.n_eval_episodes,
             deterministic=self.deterministic,
-            callback=self._log_success_callback,
+            callback=self._success_callback,
         )
         return True
 
