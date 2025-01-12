@@ -8,14 +8,15 @@ from stable_baselines3.common.base_class import BaseAlgorithm
 
 from src.rl.callbacks import EnvTerminalStatsLoggingCallback, CustomEvalCallback
 from src.rl.policy import GeGLUFFNNetExtractor
-from src.rl.traint_test.env_builder import build_continuous_env, load_datasets
+from src.rl.traint_test.env_builder import load_datasets, build_discrete_env, build_continuous_env, EnvBuildType
 
 warnings.filterwarnings("ignore",
                         message=".*To copy construct from a tensor, it is recommended to use sourceTensor.clone.*")
 
 # Синхронизируем класс и имя агента для обучения и тестирования
 agent_class: Type[BaseAlgorithm] = RecurrentPPO
-exp_name = agent_class.__name__ + '_exp1'
+exp_name: str = agent_class.__name__ + '_exp1'
+env_build: EnvBuildType = build_continuous_env
 
 def custom_learning_rate_schedule(remaining_progress: float, max_lr: float, min_lr: float) -> float:
     """
@@ -48,16 +49,16 @@ def train_agent(train, test):
     total_timesteps = 10_000_000
     num_train_envs = 1 #todo рассчитать batch для os.cpu_count()
 
-    env_eval = build_continuous_env(test, verbose=0)
-    # VecNormalize(DummyVecEnv([lambda: build_continuous_env(dataset)]))
+    env_eval = env_build(test, verbose=0)
+    # VecNormalize(DummyVecEnv([lambda: env_build(dataset)]))
 
     eval_callback = CustomEvalCallback(env_eval, best_model_save_path=f'trained_models/{exp_name}/',
                                        # by_stat='sortino_ratio',
                                        deterministic=True, render=True)
     log_callback = EnvTerminalStatsLoggingCallback()
 
-    env_train = build_continuous_env(train, verbose=0)
-    # SubprocVecEnv([lambda: build_continuous_env(train) for _ in range(num_train_envs)])
+    env_train = env_build(train, verbose=0)
+    # SubprocVecEnv([lambda: env_build(train) for _ in range(num_train_envs)])
 
     learning_rate_schedule = lambda progress: custom_learning_rate_schedule(
         progress, max_lr=3e-4, min_lr=1e-5

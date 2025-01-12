@@ -1,3 +1,4 @@
+import pickle
 from typing import Optional
 
 import matplotlib.pyplot as plt
@@ -7,8 +8,8 @@ from stable_baselines3.common.base_class import BaseAlgorithm
 from src.rl.algs.mvo import top_stocks, modern_portfolio_theory
 from src.rl.envs.base_env import BaseEnv
 from src.rl.loaders import get_start_end_dates
-from src.rl.traint_test.env_builder import load_datasets, build_continuous_env, time_window
-from src.rl.traint_test.trainer import agent_class, exp_name
+from src.rl.traint_test.env_builder import load_datasets, time_window
+from src.rl.traint_test.trainer import agent_class, env_build, exp_name
 
 
 def validation(model: BaseAlgorithm,
@@ -37,6 +38,7 @@ def validation_hold(first_action: np.ndarray, env: BaseEnv):
     action = first_action
     while True:
         obs, _, dones, _, info = env.step(action)
+        # action = np.zeros_like(first_action)
         action = obs['portfolio_dist']
         if dones:
             break
@@ -46,18 +48,22 @@ def validation_hold(first_action: np.ndarray, env: BaseEnv):
 
 def backtest():
     train, trade = load_datasets()
-    env_trade = build_continuous_env(trade, env_check=False, verbose=2)
+    env_trade = env_build(trade, env_check=False, verbose=2)
     print(get_start_end_dates(trade))
 
     trained_model = agent_class.load(f'trained_models/{exp_name}/best_model.zip')
-    env_train = build_continuous_env(train, env_check=False, verbose=0)
-    _, lstm_states = validation(trained_model, None, env_train)
+
+    # todo универсализировать
+    # env_train = env_build(train, env_check=False, verbose=0)
+    # _, lstm_states = validation(trained_model, None, env_train)
+    with open(f'trained_models/{exp_name}/best_lstm_states.pkl', 'rb') as input_file:
+        lstm_states = pickle.load(input_file).pi
 
     # Обучаемся на train
     mvo_result = modern_portfolio_theory(train)
 
     portfolio_size = trade['tic'].nunique()
-    ubah_result = [0] + [1 / portfolio_size] * portfolio_size
+    ubah_result = np.array([0] + [1 / portfolio_size] * portfolio_size)
 
     # Тут именно берём топ акций, которые вырастут на trade,
     # отсекаем первое окно, поскольку оно не участвует в сравнении

@@ -101,6 +101,7 @@ class PortfolioOptimizationEnv(BaseEnv):
             1 — информационные сообщения,
             2 — отладочные сообщения
         """
+        super().__init__(df)
         self.commission_paid = 0.0
         self.num_of_transactions = 0
         self.time_window = time_window
@@ -112,7 +113,6 @@ class PortfolioOptimizationEnv(BaseEnv):
         self.tic_column = tic_column
         self.lot_column = lot_column
 
-        self._df = df
         self.initial_amount = initial_amount
         self.reward_scaling = reward_scaling
         self.reward_type = reward_type

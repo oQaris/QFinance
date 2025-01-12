@@ -1,8 +1,10 @@
 import warnings
+from typing import Callable
 
 import pandas as pd
 from gymnasium.utils.env_checker import check_env
 
+from src.rl.envs.base_env import BaseEnv
 from src.rl.envs.continuous_env import PortfolioOptimizationEnv
 from src.rl.envs.discrete_env import StockTradingEnv
 from src.rl.loaders import split
@@ -53,7 +55,10 @@ def prepare_columns(columns):
     return window_features, time_features, indicators
 
 
-def build_continuous_env(dataset: pd.DataFrame, env_check=False, verbose=1):
+EnvBuildType = Callable[[pd.DataFrame, bool, int], BaseEnv]
+
+
+def build_continuous_env(dataset: pd.DataFrame, env_check=False, verbose=1) -> BaseEnv:
     window_features, time_features, indicators = prepare_columns(dataset.columns)
     return _build_env(PortfolioOptimizationEnv,
                       dataset,
@@ -67,7 +72,7 @@ def build_continuous_env(dataset: pd.DataFrame, env_check=False, verbose=1):
                       verbose=verbose)
 
 
-def build_discrete_env(dataset: pd.DataFrame, env_check=False, verbose=1):
+def build_discrete_env(dataset: pd.DataFrame, env_check=False, verbose=1) -> BaseEnv:
     _, _, indicators = prepare_columns(dataset.columns)
     return _build_env(StockTradingEnv,
                       dataset,
@@ -78,7 +83,7 @@ def build_discrete_env(dataset: pd.DataFrame, env_check=False, verbose=1):
                       verbose=verbose)
 
 
-def _build_env(env_class, dataset, env_check, **env_kwargs):
+def _build_env(env_class: type[BaseEnv], dataset, env_check, **env_kwargs) -> BaseEnv:
     if subset_tics is not None:
         dataset = dataset[dataset['tic'].isin(subset_tics)]
     env = env_class(dataset.copy(), **env_kwargs)

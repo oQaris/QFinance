@@ -29,17 +29,18 @@ class StockTradingEnv(BaseEnv):
             time_index=0,
             previous_state=None,
     ):
+        super().__init__(df)
         # данные
-        df = df.sort_values(['date', 'tic'], ignore_index=True)
-        df.index = df['date'].factorize()[0]
-        self.df = df
-        self.num_periods = len(self.df.index.unique())
+        self._df = self._df.sort_values(['date', 'tic'], ignore_index=True)
+        self._df.index = self._df['date'].factorize()[0]
+
+        self.num_periods = len(self._df.index.unique())
         self.time_index = time_index
-        self.data = self.df.loc[self.time_index, :]
+        self.data = self._df.loc[self.time_index, :]
 
         # среда
         self.hmax = hmax
-        self.stock_dim = len(df.tic.unique())
+        self.stock_dim = len(self._df.tic.unique())
         self.num_stock_shares = [0] * self.stock_dim
         self.initial_amount = initial_amount  # get the initial cash
         self.buy_cost_pct = self.sell_cost_pct = [comission_fee_pct] * self.stock_dim
@@ -82,7 +83,7 @@ class StockTradingEnv(BaseEnv):
         self.date_memory = [self._get_date()]
 
         # Оптимизация: предвычисляем лоты для каждого тикера
-        lots_per_tic = self.df.groupby(self.tic_column)[self.lot_column].unique()
+        lots_per_tic = self._df.groupby(self.tic_column)[self.lot_column].unique()
         if any(len(lots) > 1 for lots in lots_per_tic):
             raise ValueError("Лоты для одного тикера не совпадают во всем датасете.")
         self.lots = lots_per_tic.values.flatten()
@@ -212,7 +213,7 @@ class StockTradingEnv(BaseEnv):
 
         # Переход к следующему состоянию
         self.time_index += 1
-        self.data = self.df.loc[self.time_index, :]
+        self.data = self._df.loc[self.time_index, :]
         self.state = self._update_state()
 
         # Запоминаем необходимые данные
@@ -288,7 +289,7 @@ class StockTradingEnv(BaseEnv):
         super().reset(seed=seed)
         # initiate state
         self.time_index = 0
-        self.data = self.df.loc[self.time_index, :]
+        self.data = self._df.loc[self.time_index, :]
         self.state = self._initiate_state()
 
         if self.previous_state is None:
@@ -380,7 +381,7 @@ class StockTradingEnv(BaseEnv):
 
     def render(self):
         if self.is_terminal_state():
-            plot_with_risk_free(self.account_value_memory, calculate_periods_per_year(self.df))
+            plot_with_risk_free(self.account_value_memory, calculate_periods_per_year(self._df))
 
     @override
     def is_terminal_state(self):
