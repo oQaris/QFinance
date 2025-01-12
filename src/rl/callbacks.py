@@ -79,7 +79,7 @@ class CustomEvalCallback(EventCallback):
         if not isinstance(eval_env, VecEnv):
             eval_env = DummyVecEnv([lambda: eval_env])  # type: ignore[list-item, return-value]
 
-        if len(os.listdir(best_model_save_path)) > 0:
+        if os.path.exists(best_model_save_path) and len(os.listdir(best_model_save_path)) > 0:
             warnings.warn(f'The directory for saving models is not empty, the results will be overwritten.')
 
         self.eval_env = eval_env
@@ -177,6 +177,10 @@ class CustomEvalCallback(EventCallback):
             self._update_model_files(updated_stats)
             # Save the updated model
             self._save_model(self._create_name_by_stats(updated_stats))
+            if self.render:
+                plt.show()
+            else:
+                plt.close(plt.gcf())
         else:
             plt.close(plt.gcf())  # Закрываем фигуру, отрисованную в render()
 
