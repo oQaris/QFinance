@@ -116,7 +116,6 @@ class StockTradingEnv(BaseEnv):
                 * self.sell_cost_pct[index]
         )
         self.trades += 1
-        # todo добавить лог
 
         return sell_num_shares
 
@@ -146,24 +145,31 @@ class StockTradingEnv(BaseEnv):
 
         self.cost += self.state[index + 1].item() * buy_num_shares * self.buy_cost_pct[index]
         self.trades += 1
-        # todo добавить лог
 
         return buy_num_shares
 
     def get_terminal_stats(self):
+        metrics_df = pd.DataFrame({
+            'date': self.date_memory,
+            'returns': self.account_value_memory,
+            'portfolio_values': self.account_value_memory
+        })
+        metrics_df['returns'] = metrics_df['returns'].pct_change(1).dropna()
+        # Убедимся, что дата является DatetimeIndex
+        metrics_df['date'] = pd.to_datetime(metrics_df['date'])
+        metrics_df.set_index('date', inplace=True)
+
+        sharpe_ratio, sortino_ratio = utils.sharpe_sortino(metrics_df)
+        max_draw_down = -qs.stats.max_drawdown(metrics_df['portfolio_values'])
+
+        positions = np.array(self.state_memory)[:, self.stock_dim + 1:2 * self.stock_dim + 1]
+        mean_position_tic = np.count_nonzero(positions, axis=1).mean()
+
         # todo учесть комиссию продажи
         end_total_asset = self.state[0] + sum(
             np.array(self.state[1: (self.stock_dim + 1)])
             * np.array(self.state[(self.stock_dim + 1): (self.stock_dim * 2 + 1)])
         )
-        df_total_value = pd.DataFrame(self.account_value_memory, columns=['account_value'])
-        df_total_value['date'] = self.date_memory
-        df_total_value['returns'] = df_total_value['account_value'].pct_change(1).dropna()
-        sharpe_ratio, sortino_ratio = utils.sharpe_sortino(df_total_value)
-        max_draw_down = -qs.stats.max_drawdown(df_total_value['account_value'])
-
-        positions = np.array(self.state_memory)[:, self.stock_dim + 1:2 * self.stock_dim + 1]
-        mean_position_tic = np.count_nonzero(positions, axis=1).mean()
 
         return {
             'profit': end_total_asset / self.initial_amount,
@@ -173,23 +179,14 @@ class StockTradingEnv(BaseEnv):
             'fee_ratio': self.cost / self.initial_amount,
             'mean_position_tic': mean_position_tic,
             'mean_transactions': self.trades / (self.num_periods - 1),
+            'mean_reward': np.mean(self.rewards_memory),
+            'std_reward': np.std(self.rewards_memory),
         }
 
     @profile
     def step(self, actions):
         terminal = self.is_terminal_state()
         info = {}
-
-        if terminal:
-            terminal_stats = self.get_terminal_stats()
-            info['terminal_stats'] = terminal_stats
-            if self.verbose >= 1:
-                print('\n=================================')
-                print(f'day: {self.time_index}, episode: {self.episode}')
-                print(f'begin_total_asset: {self.initial_amount}')
-                for key, value in terminal_stats.items():
-                    print(f'{key}: {value}')
-            print('=================================')
 
         actions = actions * self.hmax
         actions = actions.astype(int)  # This cast might be redundant, but good practice.
@@ -227,9 +224,20 @@ class StockTradingEnv(BaseEnv):
 
         # Вычисляем награду
         reward = end_total_asset - begin_total_asset
-        self.rewards_memory.append(reward)
         reward = reward / self.initial_amount * 100
+        self.rewards_memory.append(reward)
         self.state_memory.append(self.state)
+
+        if terminal:
+            terminal_stats = self.get_terminal_stats()
+            info['terminal_stats'] = terminal_stats
+            if self.verbose >= 1:
+                print('\n=================================')
+                print(f'day: {self.time_index}, episode: {self.episode}')
+                print(f'begin_total_asset: {self.initial_amount}')
+                for key, value in terminal_stats.items():
+                    print(f'{key}: {value}')
+                print('=================================')
 
         return self.state, reward, terminal, False, info
 
@@ -242,6 +250,7 @@ class StockTradingEnv(BaseEnv):
             for idx in nonzero_indices[0]:
                 elem = actions[idx]
                 if elem > 0:
+                    #todo ORUP lot
                     print(f'{date}: куплено {elem} акций {tics[idx]}')
                 elif elem < 0:
                     print(f'{date}: продано {-elem} акций {tics[idx]}')
