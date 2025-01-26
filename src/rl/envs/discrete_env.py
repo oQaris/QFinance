@@ -165,14 +165,14 @@ class StockTradingEnv(BaseEnv):
         positions = np.array(self.state_memory)[:, self.stock_dim + 1:2 * self.stock_dim + 1]
         mean_position_tic = np.count_nonzero(positions, axis=1).mean()
 
-        # todo учесть комиссию продажи
-        end_total_asset = self.state[0] + sum(
-            np.array(self.state[1: (self.stock_dim + 1)])
-            * np.array(self.state[(self.stock_dim + 1): (self.stock_dim * 2 + 1)])
-        )
+        # Продаём все акции перед вычислением дохода
+        for i in range(self.stock_dim):
+            if self.state[i + self.stock_dim + 1] > 0:
+                self._sell_stock(i, -self.state[i + self.stock_dim + 1].item())
+        final_amount = self.state[0].item()
 
         return {
-            'profit': end_total_asset / self.initial_amount,
+            'profit': final_amount / self.initial_amount,
             'max_draw_down': max_draw_down,
             'sharpe_ratio': sharpe_ratio,
             'sortino_ratio': sortino_ratio,
