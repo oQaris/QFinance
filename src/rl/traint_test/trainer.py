@@ -7,15 +7,16 @@ from sb3_contrib import RecurrentPPO
 from stable_baselines3.common.base_class import BaseAlgorithm
 
 from src.rl.callbacks import EnvTerminalStatsLoggingCallback, CustomEvalCallback
+from src.rl.distributions.lstm_policy import DirichletLSTMPolicy
 from src.rl.policy import GeGLUFFNNetExtractor
-from src.rl.traint_test.env_builder import load_datasets, build_discrete_env, build_continuous_env, EnvBuildType
+from src.rl.traint_test.env_builder import load_datasets, build_discrete_env, EnvBuildType, build_continuous_env
 
 warnings.filterwarnings("ignore",
                         message=".*To copy construct from a tensor, it is recommended to use sourceTensor.clone.*")
 
 # Синхронизируем класс и имя агента для обучения и тестирования
 agent_class: Type[BaseAlgorithm] = RecurrentPPO
-exp_name: str = agent_class.__name__ + '_exp1'
+exp_name: str = agent_class.__name__ + '_exp_continuous_dirichlet'
 env_build: EnvBuildType = build_continuous_env
 
 def custom_learning_rate_schedule(remaining_progress: float, max_lr: float, min_lr: float) -> float:
@@ -84,13 +85,14 @@ def train_agent(train, test):
 
     batch = int(256 / num_train_envs)
     agent = agent_class(
-        policy='MlpLstmPolicy',
+        policy=DirichletLSTMPolicy,
         policy_kwargs=policy_kwargs,
         n_epochs=1,
         n_steps=batch,
         # learning_starts=1,
         batch_size=batch,
-        learning_rate=1e-4,
+        learning_rate=1e-3,
+        max_grad_norm=10,
         env=env_train,
         verbose=0,
         tensorboard_log='./tensorboard_log/',
