@@ -68,7 +68,15 @@ class DirichletDistribution(Distribution):
         """
         Возвращает режим распределения (самое вероятное значение).
         """
-        return self.distribution.mode
+        alpha = self.distribution.concentration
+        alpha_minus_1 = alpha - 1
+        sum_alpha_minus_1 = alpha_minus_1.sum(dim=-1, keepdim=True)
+        mode = th.where(
+            sum_alpha_minus_1 > 0,
+            alpha_minus_1 / sum_alpha_minus_1,
+            th.ones_like(alpha) / self.action_dim
+        )
+        return mode
 
     def actions_from_params(self, alpha: th.Tensor) -> th.Tensor:
         """
