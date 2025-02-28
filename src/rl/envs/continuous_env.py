@@ -164,14 +164,8 @@ class PortfolioOptimizationEnv(BaseEnv):
         terminal = self.is_terminal_state()
         info = {}
 
-        # if necessary, normalize weights
-        if np.abs(np.sum(actions) - 1) < 1e-4 and np.min(actions) >= 0:
-            weights = actions / np.sum(actions)
-        else:
-            # print('_custom_softmax')
-            # weights = _custom_softmax(actions)
-            weights = _softmax(actions)
-            # weights = _scale_to_unit_sum(actions)
+        assert np.min(actions) >= 0 and np.max(actions) > 0
+        weights = actions / np.sum(actions)
 
         # save initial portfolio weights for this time step
         self._actions_memory.append(weights)

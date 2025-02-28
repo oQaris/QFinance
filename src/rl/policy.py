@@ -3,6 +3,7 @@ from typing import Callable, TypeVar
 
 import gym
 import torch as th
+import torch.nn.init as init
 from gymnasium import spaces
 from sb3_contrib.common.recurrent.policies import RecurrentMultiInputActorCriticPolicy
 from stable_baselines3.common.distributions import Distribution
@@ -15,7 +16,7 @@ from torch import nn
 from src.rl.architectures.base import BaseNetwork
 from src.rl.architectures.geglu_ffn import GeGLUFFNNetwork
 from src.rl.architectures.rnn import RNNPolicyNetwork
-from src.rl.distr import DirichletDistribution
+from src.rl.distributions.dirichlet import DirichletDistribution
 
 NN = TypeVar('NN', bound=BaseNetwork)
 
@@ -82,7 +83,11 @@ class GeGLUFFNNetExtractor(BaseFeaturesExtractor):
         else:
             input_dim = get_flattened_obs_dim(observation_space)
         self.flatten = nn.Flatten()
+
         self.linear = nn.Linear(input_dim, features_dim)
+        init.kaiming_uniform_(self.linear.weight)
+        init.zeros_(self.linear.bias)
+
         self.geglu_ffn_net = GeGLUFFNNetwork(dim=features_dim, num_blocks=num_blocks, dropout=dropout)
 
     def forward(self, observations) -> th.Tensor:

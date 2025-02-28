@@ -206,7 +206,7 @@ class CustomEvalCallback(EventCallback):
 
     def _on_step(self) -> bool:
         dones = self.locals.get('dones', [])
-        if not all(dones) and self.n_calls != 1:
+        if not all(dones):
             if any(dones):
                 raise ValueError('Episode lengths should be the same in all training environments')
             return True

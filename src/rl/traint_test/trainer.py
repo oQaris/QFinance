@@ -9,14 +9,14 @@ from stable_baselines3.common.base_class import BaseAlgorithm
 from src.rl.callbacks import EnvTerminalStatsLoggingCallback, CustomEvalCallback
 from src.rl.distributions.lstm_policy import DirichletLSTMPolicy
 from src.rl.policy import GeGLUFFNNetExtractor
-from src.rl.traint_test.env_builder import load_datasets, build_discrete_env, EnvBuildType, build_continuous_env
+from src.rl.traint_test.env_builder import load_datasets, EnvBuildType, build_continuous_env
 
 warnings.filterwarnings("ignore",
                         message=".*To copy construct from a tensor, it is recommended to use sourceTensor.clone.*")
 
 # Синхронизируем класс и имя агента для обучения и тестирования
 agent_class: Type[BaseAlgorithm] = RecurrentPPO
-exp_name: str = agent_class.__name__ + '_exp_continuous_dirichlet'
+exp_name: str = agent_class.__name__ + '_exp_continuous_dirichlet_no_clip'
 env_build: EnvBuildType = build_continuous_env
 
 def custom_learning_rate_schedule(remaining_progress: float, max_lr: float, min_lr: float) -> float:
@@ -61,9 +61,9 @@ def train_agent(train, test):
     env_train = env_build(train, verbose=0)
     # SubprocVecEnv([lambda: env_build(train) for _ in range(num_train_envs)])
 
-    learning_rate_schedule = lambda progress: custom_learning_rate_schedule(
-        progress, max_lr=3e-4, min_lr=1e-5
-    )
+    # learning_rate_schedule = lambda progress: custom_learning_rate_schedule(
+    #     progress, max_lr=3e-4, min_lr=1e-5
+    # )
 
     action_dim = env_eval.action_space.shape[0]
     features_dim = 1024
@@ -92,7 +92,7 @@ def train_agent(train, test):
         # learning_starts=1,
         batch_size=batch,
         learning_rate=1e-3,
-        max_grad_norm=10,
+        max_grad_norm=30,
         env=env_train,
         verbose=0,
         tensorboard_log='./tensorboard_log/',

@@ -38,7 +38,6 @@ def validation_hold(first_action: np.ndarray, env: BaseEnv):
     action = first_action
     while True:
         obs, _, dones, _, info = env.step(action)
-        # action = np.zeros_like(first_action)
         action = obs['portfolio_dist']
         if dones:
             break
@@ -46,17 +45,31 @@ def validation_hold(first_action: np.ndarray, env: BaseEnv):
     return env.get_portfolio_size_history()
 
 
+def validation_hold_discrete(first_action: np.ndarray, env: BaseEnv):
+    env.reset()
+    action = first_action
+    while True:
+        obs, _, dones, _, info = env.step(action)
+        action = np.zeros_like(first_action)
+        if dones:
+            break
+    return env.get_portfolio_size_history()
+
 def backtest():
     train, trade = load_datasets()
     env_trade = env_build(trade, env_check=False, verbose=2)
     print(get_start_end_dates(trade))
 
-    trained_model = agent_class.load(f'trained_models/{exp_name}/best_model.zip')
+    model_name = 'best_model-profit-mean_reward'
+    trained_model = agent_class.load(f'trained_models/{exp_name}/{model_name}')
 
     # todo универсализировать
+    lstm_states = None
     # env_train = env_build(train, env_check=False, verbose=0)
     # _, lstm_states = validation(trained_model, None, env_train)
-    with open(f'trained_models/{exp_name}/best_lstm_states.pkl', 'rb') as input_file:
+
+    with open(f'trained_models/{exp_name}/{model_name}_lstm_states.pkl', 'rb') as input_file:
+        # with open('C:/Users/oQaris/Desktop/Git/QFinance/trained_models/RecurrentPPO_exp2/best_lstm_states', 'rb') as input_file:
         lstm_states = pickle.load(input_file).pi
 
     # Обучаемся на train
