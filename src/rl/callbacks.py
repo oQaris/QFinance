@@ -10,7 +10,7 @@ from sb3_contrib import RecurrentPPO
 from sb3_contrib.common.recurrent.type_aliases import RNNStates
 from stable_baselines3.common.base_class import BaseAlgorithm
 from stable_baselines3.common.callbacks import BaseCallback, EventCallback
-from stable_baselines3.common.vec_env import DummyVecEnv
+from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize, VecVideoRecorder, SubprocVecEnv
 from stable_baselines3.common.vec_env import VecEnv, sync_envs_normalization
 
 
@@ -38,6 +38,83 @@ def get_terminal_stats(dones: list[bool], infos: dict) -> dict[Any, int] | None:
     for key, _ in aggregated_stats.items():
         aggregated_stats[key] /= num_envs
     return aggregated_stats
+
+
+class RecordGridVideoCallback(BaseCallback):
+    def __init__(self, env_fn, video_folder: str, num_envs: int = 9):
+        super().__init__()
+        self.env_fn = env_fn
+        self.video_folder = video_folder
+        self.num_envs = num_envs
+        os.makedirs(video_folder, exist_ok=True)
+
+    def _on_step(self) -> bool:
+        # Использование SubprocVecEnv добавляет сетку на видео
+        env = SubprocVecEnv([self.env_fn] * self.num_envs)
+
+        # Если используется нормализация при обучении, то дублируем статистики на тесте
+        if self.model.get_vec_normalize_env() is not None:
+            env = VecNormalize(env, training=False, norm_reward=False)
+            sync_envs_normalization(self.training_env, env)
+
+        env = VecVideoRecorder(venv=env,
+                               video_folder=self.video_folder,
+                               record_video_trigger=lambda x: True,
+                               video_length=int(1e6),  # effectively infinity
+                               # Префикс с n_calls, чтобы не затиралось предыдущее видео
+                               name_prefix=f'grid_{self.n_calls}')
+        obs = env.reset()
+        completed_episodes = [False] * self.num_envs
+        while True:
+            actions, _ = self.model.predict(obs, deterministic=True)
+            obs, _, dones, _ = env.step(actions)
+            for i, done in enumerate(dones):
+                if done:
+                    # Делаем такой хак, поскольку векторизированные среды перезапускаются
+                    # и одновременно все all(dones) не достигаются.
+                    # Таким образом ограничиваем развёртывание среды длиной максимального эпизода
+                    completed_episodes[i] = True
+            if all(completed_episodes):
+                # Приходится вызывать вручную, поскольку не полагаемся на video_length
+                env._stop_recording()
+                break
+        env.close()
+        return True
+
+
+class SaveVecNormalizeCallback(BaseCallback):
+    """
+    Callback for saving a VecNormalize wrapper every ``save_freq`` steps
+
+    :param save_freq: (int)
+    :param save_path: (str) Path to the folder where ``VecNormalize`` will be saved, as ``vecnormalize.pkl``
+    :param name_prefix: (str) Common prefix to the saved ``VecNormalize``, if None (default)
+        only one file will be kept.
+    """
+
+    def __init__(self, save_freq: int, save_path: str, name_prefix: Optional[str] = None, verbose: int = 0):
+        super(SaveVecNormalizeCallback, self).__init__(verbose)
+        self.save_freq = save_freq
+        self.save_path = save_path
+        self.name_prefix = name_prefix
+
+    def _init_callback(self) -> None:
+        # Create folder if needed
+        if self.save_path is not None:
+            os.makedirs(self.save_path, exist_ok=True)
+
+    def _on_step(self) -> bool:
+        if self.n_calls % self.save_freq == 0:
+            if self.name_prefix is not None:
+                path = os.path.join(self.save_path, f"{self.name_prefix}_{self.num_timesteps}_steps.pkl")
+            else:
+                path = os.path.join(self.save_path, "vecnormalize.pkl")
+            if self.model.get_vec_normalize_env() is not None:
+                self.model.get_vec_normalize_env().save(path)
+                if self.verbose > 1:
+                    print(f"Saving VecNormalize to {path}")
+        return True
+
 
 class EnvTerminalStatsLoggingCallback(BaseCallback):
     def __init__(self, verbose=0):
